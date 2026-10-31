@@ -5,6 +5,7 @@ import operator
 import os
 import shutil
 import sys
+
 try:
     from pycocotools.coco import COCO
     from pycocotools.cocoeval import COCOeval
@@ -12,11 +13,12 @@ except:
     pass
 import cv2
 import matplotlib
-matplotlib.use('Agg')
-from matplotlib import pyplot as plt
-import numpy as np
 
-'''
+matplotlib.use("Agg")
+import numpy as np
+from matplotlib import pyplot as plt
+
+"""
     0,0 ------> x (width)
      |
      |  (Left,Top)
@@ -26,35 +28,36 @@ import numpy as np
      y      |_________|
   (height)            *
                 (Right,Bottom)
-'''
-#TODO： Daixb202607221645  新增：根尺度划分（按面积像素） 'small', 'medium', 'large‘
-def get_scale(area):
-    if area < 32*32:
-        return 'small'
-    elif area < 96*96:
-        return 'medium'
-    else:
-        return 'large'
+"""
 
-SCALE_NAMES = ['small', 'medium', 'large']
+
+# TODO： Daixb202607221645  新增：根尺度划分（按面积像素） 'small', 'medium', 'large‘
+def get_scale(area):
+    if area < 32 * 32:
+        return "small"
+    elif area < 96 * 96:
+        return "medium"
+    else:
+        return "large"
+
+
+SCALE_NAMES = ["small", "medium", "large"]
+
 
 def log_average_miss_rate(precision, fp_cumsum, num_images):
+    """log-average miss rate: Calculated by averaging miss rates at 9 evenly spaced FPPI points between 10e-2 and 10e0,
+    in log-space.
+
+    output:
+            lamr | log-average miss rate
+            mr | miss rate
+            fppi | false positives per image
+
+    References:
+        [1] Dollar, Piotr, et al. "Pedestrian Detection: An Evaluation of the
+           State of the Art." Pattern Analysis and Machine Intelligence, IEEE
+           Transactions on 34.4 (2012): 743 - 761.
     """
-        log-average miss rate:
-            Calculated by averaging miss rates at 9 evenly spaced FPPI points
-            between 10e-2 and 10e0, in log-space.
-
-        output:
-                lamr | log-average miss rate
-                mr | miss rate
-                fppi | false positives per image
-
-        references:
-            [1] Dollar, Piotr, et al. "Pedestrian Detection: An Evaluation of the
-               State of the Art." Pattern Analysis and Machine Intelligence, IEEE
-               Transactions on 34.4 (2012): 743 - 761.
-    """
-
     if precision.size == 0:
         lamr = 0
         mr = 1
@@ -62,12 +65,12 @@ def log_average_miss_rate(precision, fp_cumsum, num_images):
         return lamr, mr, fppi
 
     fppi = fp_cumsum / float(num_images)
-    mr = (1 - precision)
+    mr = 1 - precision
 
     fppi_tmp = np.insert(fppi, 0, -1.0)
     mr_tmp = np.insert(mr, 0, 1.0)
 
-    ref = np.logspace(-2.0, 0.0, num = 9)
+    ref = np.logspace(-2.0, 0.0, num=9)
     for i, ref_i in enumerate(ref):
         j = np.where(fppi_tmp <= ref_i)[-1][-1]
         ref[i] = mr_tmp[j]
@@ -76,25 +79,29 @@ def log_average_miss_rate(precision, fp_cumsum, num_images):
 
     return lamr, mr, fppi
 
+
 """
  throw error and exit
 """
+
+
 def error(msg):
     print(msg)
     sys.exit(0)
 
+
 """
  check if the number is a float between 0.0 and 1.0
 """
+
+
 def is_float_between_0_and_1(value):
     try:
         val = float(value)
-        if val > 0.0 and val < 1.0:
-            return True
-        else:
-            return False
+        return bool(val > 0.0 and val < 1.0)
     except ValueError:
         return False
+
 
 """
  Calculate the AP given the recall and precision array
@@ -102,22 +109,17 @@ def is_float_between_0_and_1(value):
          precision monotonically decreasing
     2nd) We compute the AP as the area under this curve by numerical integration.
 """
+
+
 def voc_ap(rec, prec):
+    """--- Official matlab code VOC2012--- mrec=[0 ; rec ; 1]; mpre=[0 ; prec ; 0]; for i=numel(mpre)-1:-1:1
+    mpre(i)=max(mpre(i),mpre(i+1)); end i=find(mrec(2:end)~=mrec(1:end-1))+1; ap=sum((mrec(i)-mrec(i-1)).*mpre(i));.
     """
-    --- Official matlab code VOC2012---
-    mrec=[0 ; rec ; 1];
-    mpre=[0 ; prec ; 0];
-    for i=numel(mpre)-1:-1:1
-            mpre(i)=max(mpre(i),mpre(i+1));
-    end
-    i=find(mrec(2:end)~=mrec(1:end-1))+1;
-    ap=sum((mrec(i)-mrec(i-1)).*mpre(i));
-    """
-    rec.insert(0, 0.0) # insert 0.0 at begining of list
-    rec.append(1.0) # insert 1.0 at end of list
+    rec.insert(0, 0.0)  # insert 0.0 at beginning of list
+    rec.append(1.0)  # insert 1.0 at end of list
     mrec = rec[:]
-    prec.insert(0, 0.0) # insert 0.0 at begining of list
-    prec.append(0.0) # insert 0.0 at end of list
+    prec.insert(0, 0.0)  # insert 0.0 at beginning of list
+    prec.append(0.0)  # insert 0.0 at end of list
     mpre = prec[:]
     """
      This part makes the precision monotonically decreasing
@@ -125,16 +127,16 @@ def voc_ap(rec, prec):
         matlab: for i=numel(mpre)-1:-1:1
                     mpre(i)=max(mpre(i),mpre(i+1));
     """
-    for i in range(len(mpre)-2, -1, -1):
-        mpre[i] = max(mpre[i], mpre[i+1])
+    for i in range(len(mpre) - 2, -1, -1):
+        mpre[i] = max(mpre[i], mpre[i + 1])
     """
      This part creates a list of indexes where the recall changes
         matlab: i=find(mrec(2:end)~=mrec(1:end-1))+1;
     """
     i_list = []
     for i in range(1, len(mrec)):
-        if mrec[i] != mrec[i-1]:
-            i_list.append(i) # if it was matlab would be i + 1
+        if mrec[i] != mrec[i - 1]:
+            i_list.append(i)  # if it was matlab would be i + 1
     """
      The Average Precision (AP) is the area under the curve
         (numerical integration)
@@ -142,13 +144,15 @@ def voc_ap(rec, prec):
     """
     ap = 0.0
     for i in i_list:
-        ap += ((mrec[i]-mrec[i-1])*mpre[i])
+        ap += (mrec[i] - mrec[i - 1]) * mpre[i]
     return ap, mrec, mpre
 
 
 """
  Convert the lines of a file to a list
 """
+
+
 def file_lines_to_list(path):
     # open txt file lines to a list
     with open(path) as f:
@@ -157,26 +161,27 @@ def file_lines_to_list(path):
     content = [x.strip() for x in content]
     return content
 
+
 """
  Draws text in image
 """
+
+
 def draw_text_in_image(img, text, pos, color, line_width):
     font = cv2.FONT_HERSHEY_PLAIN
     fontScale = 1
     lineType = 1
     bottomLeftCornerOfText = pos
-    cv2.putText(img, text,
-            bottomLeftCornerOfText,
-            font,
-            fontScale,
-            color,
-            lineType)
+    cv2.putText(img, text, bottomLeftCornerOfText, font, fontScale, color, lineType)
     text_width, _ = cv2.getTextSize(text, font, fontScale, lineType)[0]
     return img, (line_width + text_width)
+
 
 """
  Plot - adjust axes
 """
+
+
 def adjust_axes(r, t, fig, axes):
     # get text width for re-scaling
     bb = t.get_window_extent(renderer=r)
@@ -187,17 +192,21 @@ def adjust_axes(r, t, fig, axes):
     propotion = new_fig_width / current_fig_width
     # get axis limit
     x_lim = axes.get_xlim()
-    axes.set_xlim([x_lim[0], x_lim[1]*propotion])
+    axes.set_xlim([x_lim[0], x_lim[1] * propotion])
+
 
 """
  Draw plot using Matplotlib
 """
-def draw_plot_func(dictionary, n_classes, window_title, plot_title, x_label, output_path, to_show, plot_color, true_p_bar):
+
+
+def draw_plot_func(
+    dictionary, n_classes, window_title, plot_title, x_label, output_path, to_show, plot_color, true_p_bar
+):
     # sort the dictionary by decreasing value, into a list of tuples
     sorted_dic_by_value = sorted(dictionary.items(), key=operator.itemgetter(1))
     # unpacking the list of tuples into two lists
     sorted_keys, sorted_values = zip(*sorted_dic_by_value)
-    # 
     if true_p_bar != "":
         """
          Special case to draw in:
@@ -210,14 +219,16 @@ def draw_plot_func(dictionary, n_classes, window_title, plot_title, x_label, out
         for key in sorted_keys:
             fp_sorted.append(dictionary[key] - true_p_bar[key])
             tp_sorted.append(true_p_bar[key])
-        plt.barh(range(n_classes), fp_sorted, align='center', color='crimson', label='False Positive')
-        plt.barh(range(n_classes), tp_sorted, align='center', color='forestgreen', label='True Positive', left=fp_sorted)
+        plt.barh(range(n_classes), fp_sorted, align="center", color="crimson", label="False Positive")
+        plt.barh(
+            range(n_classes), tp_sorted, align="center", color="forestgreen", label="True Positive", left=fp_sorted
+        )
         # add legend
-        plt.legend(loc='lower right')
+        plt.legend(loc="lower right")
         """
          Write number on side of bar
         """
-        fig = plt.gcf() # gcf - get current figure
+        fig = plt.gcf()  # gcf - get current figure
         axes = plt.gca()
         r = fig.canvas.get_renderer()
         for i, val in enumerate(sorted_values):
@@ -227,29 +238,29 @@ def draw_plot_func(dictionary, n_classes, window_title, plot_title, x_label, out
             tp_str_val = fp_str_val + " " + str(tp_val)
             # trick to paint multicolor with offset:
             # first paint everything and then repaint the first number
-            t = plt.text(val, i, tp_str_val, color='forestgreen', va='center', fontweight='bold')
-            plt.text(val, i, fp_str_val, color='crimson', va='center', fontweight='bold')
-            if i == (len(sorted_values)-1): # largest bar
+            t = plt.text(val, i, tp_str_val, color="forestgreen", va="center", fontweight="bold")
+            plt.text(val, i, fp_str_val, color="crimson", va="center", fontweight="bold")
+            if i == (len(sorted_values) - 1):  # largest bar
                 adjust_axes(r, t, fig, axes)
     else:
         plt.barh(range(n_classes), sorted_values, color=plot_color)
         """
          Write number on side of bar
         """
-        fig = plt.gcf() # gcf - get current figure
+        fig = plt.gcf()  # gcf - get current figure
         axes = plt.gca()
         r = fig.canvas.get_renderer()
         for i, val in enumerate(sorted_values):
-            str_val = " " + str(val) # add a space before
+            str_val = " " + str(val)  # add a space before
             if val < 1.0:
-                str_val = " {0:.2f}".format(val)
-            t = plt.text(val, i, str_val, color=plot_color, va='center', fontweight='bold')
+                str_val = f" {val:.2f}"
+            t = plt.text(val, i, str_val, color=plot_color, va="center", fontweight="bold")
             # re-set axes to show number inside the figure
-            if i == (len(sorted_values)-1): # largest bar
+            if i == (len(sorted_values) - 1):  # largest bar
                 adjust_axes(r, t, fig, axes)
     # set window title
     # fig.canvas.set_window_title(window_title)    # 原代码
-    fig.canvas.manager.set_window_title(window_title)  #TODO: Daixb202607221602     改进：
+    fig.canvas.manager.set_window_title(window_title)  # TODO: Daixb202607221602     改进：
     # write classes in y axis
     tick_font_size = 12
     plt.yticks(range(n_classes), sorted_keys, fontsize=tick_font_size)
@@ -259,11 +270,11 @@ def draw_plot_func(dictionary, n_classes, window_title, plot_title, x_label, out
     init_height = fig.get_figheight()
     # comput the matrix height in points and inches
     dpi = fig.dpi
-    height_pt = n_classes * (tick_font_size * 1.4) # 1.4 (some spacing)
+    height_pt = n_classes * (tick_font_size * 1.4)  # 1.4 (some spacing)
     height_in = height_pt / dpi
-    # compute the required figure height 
-    top_margin = 0.15 # in percentage of the figure height
-    bottom_margin = 0.05 # in percentage of the figure height
+    # compute the required figure height
+    top_margin = 0.15  # in percentage of the figure height
+    bottom_margin = 0.05  # in percentage of the figure height
     figure_height = height_in / (1 - top_margin - bottom_margin)
     # set new height
     if figure_height > init_height:
@@ -273,7 +284,7 @@ def draw_plot_func(dictionary, n_classes, window_title, plot_title, x_label, out
     plt.title(plot_title, fontsize=14)
     # set axis titles
     # plt.xlabel('classes')
-    plt.xlabel(x_label, fontsize='large')
+    plt.xlabel(x_label, fontsize="large")
     # adjust size of window
     fig.tight_layout()
     # save the plot
@@ -284,19 +295,19 @@ def draw_plot_func(dictionary, n_classes, window_title, plot_title, x_label, out
     # close the plot
     plt.close()
 
-# def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path = './map_out'): #TODO： Daixb202607221645  修改函数签名。
-def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eval=True, iou_thresholds=None):
-    """    scale_eval: 是否计算分尺度指标；
-    iou_thresholds: 若为None则只计算MINOVERLAP，否则计算多个IoU阈值下的AP（用于0.5:0.95）    """
 
-    GT_PATH             = os.path.join(path, 'ground-truth')
-    DR_PATH             = os.path.join(path, 'detection-results')
-    IMG_PATH            = os.path.join(path, 'images-optional')
-    TEMP_FILES_PATH     = os.path.join(path, '.temp_files')
-    RESULTS_FILES_PATH  = os.path.join(path, 'results')
+# def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path = './map_out'): #TODO： Daixb202607221645  修改函数签名。
+def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path="map_out", scale_eval=True, iou_thresholds=None):
+    """scale_eval: 是否计算分尺度指标； iou_thresholds: 若为None则只计算MINOVERLAP，否则计算多个IoU阈值下的AP（用于0.5:0.95）.
+    """
+    GT_PATH = os.path.join(path, "ground-truth")
+    DR_PATH = os.path.join(path, "detection-results")
+    IMG_PATH = os.path.join(path, "images-optional")
+    TEMP_FILES_PATH = os.path.join(path, ".temp_files")
+    RESULTS_FILES_PATH = os.path.join(path, "results")
 
     show_animation = True
-    if os.path.exists(IMG_PATH): 
+    if os.path.exists(IMG_PATH):
         for dirpath, dirnames, files in os.walk(IMG_PATH):
             if not files:
                 show_animation = False
@@ -305,14 +316,14 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
 
     if not os.path.exists(TEMP_FILES_PATH):
         os.makedirs(TEMP_FILES_PATH)
-        
+
     if os.path.exists(RESULTS_FILES_PATH):
         shutil.rmtree(RESULTS_FILES_PATH)
     else:
         os.makedirs(RESULTS_FILES_PATH)
     if draw_plot:
         try:
-            matplotlib.use('TkAgg')
+            matplotlib.use("TkAgg")
         except:
             pass
         os.makedirs(os.path.join(RESULTS_FILES_PATH, "AP"))
@@ -322,11 +333,11 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
     if show_animation:
         os.makedirs(os.path.join(RESULTS_FILES_PATH, "images", "detections_one_by_one"))
 
-    ground_truth_files_list = glob.glob(GT_PATH + '/*.txt')
+    ground_truth_files_list = glob.glob(GT_PATH + "/*.txt")
     if len(ground_truth_files_list) == 0:
         error("Error: No ground-truth files found!")
     ground_truth_files_list.sort()
-    gt_counter_per_class     = {}
+    gt_counter_per_class = {}
     counter_images_per_class = {}
 
     gt_counter_per_class_scale = {}  # TODO： Daixb202607221645 新增：按 (class, scale) 统计 GT 数量
@@ -334,15 +345,15 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
     scale_mr_collection = {scale: [] for scale in SCALE_NAMES}
 
     for txt_file in ground_truth_files_list:
-        file_id     = txt_file.split(".txt", 1)[0]
-        file_id     = os.path.basename(os.path.normpath(file_id))
-        temp_path   = os.path.join(DR_PATH, (file_id + ".txt"))
+        file_id = txt_file.split(".txt", 1)[0]
+        file_id = os.path.basename(os.path.normpath(file_id))
+        temp_path = os.path.join(DR_PATH, (file_id + ".txt"))
         if not os.path.exists(temp_path):
-            error_msg = "Error. File not found: {}\n".format(temp_path)
+            error_msg = f"Error. File not found: {temp_path}\n"
             error(error_msg)
-        lines_list      = file_lines_to_list(txt_file)
-        bounding_boxes  = []
-        is_difficult    = False
+        lines_list = file_lines_to_list(txt_file)
+        bounding_boxes = []
+        is_difficult = False
         already_seen_classes = []
         for line in lines_list:
             try:
@@ -353,28 +364,28 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
                     class_name, left, top, right, bottom = line.split()
             except:
                 if "difficult" in line:
-                    line_split  = line.split()
-                    _difficult  = line_split[-1]
-                    bottom      = line_split[-2]
-                    right       = line_split[-3]
-                    top         = line_split[-4]
-                    left        = line_split[-5]
-                    class_name  = ""
+                    line_split = line.split()
+                    _difficult = line_split[-1]
+                    bottom = line_split[-2]
+                    right = line_split[-3]
+                    top = line_split[-4]
+                    left = line_split[-5]
+                    class_name = ""
                     for name in line_split[:-5]:
                         class_name += name + " "
-                    class_name  = class_name[:-1]
+                    class_name = class_name[:-1]
                     is_difficult = True
                 else:
-                    line_split  = line.split()
-                    bottom      = line_split[-1]
-                    right       = line_split[-2]
-                    top         = line_split[-3]
-                    left        = line_split[-4]
-                    class_name  = ""
+                    line_split = line.split()
+                    bottom = line_split[-1]
+                    right = line_split[-2]
+                    top = line_split[-3]
+                    left = line_split[-4]
+                    class_name = ""
                     for name in line_split[:-4]:
                         class_name += name + " "
                     class_name = class_name[:-1]
-            #TODO： Daixb202607221645 ---- 新增：计算面积和尺度 ----
+            # TODO： Daixb202607221645 ---- 新增：计算面积和尺度 ----
             left_val = float(left)
             top_val = float(top)
             right_val = float(right)
@@ -383,22 +394,33 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
             height = bottom_val - top_val
             area = width * height
             scale = get_scale(area)
-            #TODO： Daixb202607221645 ----------------------------
+            # TODO： Daixb202607221645 ----------------------------
 
             bbox = left + " " + top + " " + right + " " + bottom
             if is_difficult:
                 # bounding_boxes.append({"class_name":class_name, "bbox":bbox, "used":False, "difficult":True}) #TODO： Daixb202607221703 原代码
-                bounding_boxes.append({"class_name":class_name, "bbox":bbox, "used":False, "difficult":True, "scale": scale,  "area": area}) #TODO： Daixb202607221703 添加 scale 和 area 字段
+                bounding_boxes.append(
+                    {
+                        "class_name": class_name,
+                        "bbox": bbox,
+                        "used": False,
+                        "difficult": True,
+                        "scale": scale,
+                        "area": area,
+                    }
+                )  # TODO： Daixb202607221703 添加 scale 和 area 字段
                 is_difficult = False
             else:
                 # bounding_boxes.append({"class_name":class_name, "bbox":bbox, "used":False}) #TODO： Daixb202607221703 原代码
-                bounding_boxes.append({"class_name":class_name, "bbox":bbox, "used":False, "scale": scale,  "area": area}) #TODO： Daixb202607221703 添加 scale 和 area 字段
+                bounding_boxes.append(
+                    {"class_name": class_name, "bbox": bbox, "used": False, "scale": scale, "area": area}
+                )  # TODO： Daixb202607221703 添加 scale 和 area 字段
                 if class_name in gt_counter_per_class:
                     gt_counter_per_class[class_name] += 1
                 else:
                     gt_counter_per_class[class_name] = 1
 
-                #TODO： Daixb202607221703 新增：按尺度统计
+                # TODO： Daixb202607221703 新增：按尺度统计
                 key = (class_name, scale)
                 gt_counter_per_class_scale[key] = gt_counter_per_class_scale.get(key, 0) + 1
                 # TODO：Daixb202607221703 ——————————
@@ -409,53 +431,52 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
                         counter_images_per_class[class_name] = 1
                     already_seen_classes.append(class_name)
 
-        with open(TEMP_FILES_PATH + "/" + file_id + "_ground_truth.json", 'w') as outfile:
+        with open(TEMP_FILES_PATH + "/" + file_id + "_ground_truth.json", "w") as outfile:
             json.dump(bounding_boxes, outfile)
 
-    gt_classes  = list(gt_counter_per_class.keys())
-    gt_classes  = sorted(gt_classes)
-    n_classes   = len(gt_classes)
+    gt_classes = list(gt_counter_per_class.keys())
+    gt_classes = sorted(gt_classes)
+    n_classes = len(gt_classes)
 
-    dr_files_list = glob.glob(DR_PATH + '/*.txt')
+    dr_files_list = glob.glob(DR_PATH + "/*.txt")
     dr_files_list.sort()
     for class_index, class_name in enumerate(gt_classes):
         bounding_boxes = []
         for txt_file in dr_files_list:
-            file_id = txt_file.split(".txt",1)[0]
+            file_id = txt_file.split(".txt", 1)[0]
             file_id = os.path.basename(os.path.normpath(file_id))
             temp_path = os.path.join(GT_PATH, (file_id + ".txt"))
-            if class_index == 0:
-                if not os.path.exists(temp_path):
-                    error_msg = "Error. File not found: {}\n".format(temp_path)
-                    error(error_msg)
+            if class_index == 0 and not os.path.exists(temp_path):
+                error_msg = f"Error. File not found: {temp_path}\n"
+                error(error_msg)
             lines = file_lines_to_list(txt_file)
             for line in lines:
                 try:
                     tmp_class_name, confidence, left, top, right, bottom = line.split()
                 except:
-                    line_split      = line.split()
-                    bottom          = line_split[-1]
-                    right           = line_split[-2]
-                    top             = line_split[-3]
-                    left            = line_split[-4]
-                    confidence      = line_split[-5]
-                    tmp_class_name  = ""
+                    line_split = line.split()
+                    bottom = line_split[-1]
+                    right = line_split[-2]
+                    top = line_split[-3]
+                    left = line_split[-4]
+                    confidence = line_split[-5]
+                    tmp_class_name = ""
                     for name in line_split[:-5]:
                         tmp_class_name += name + " "
-                    tmp_class_name  = tmp_class_name[:-1]
+                    tmp_class_name = tmp_class_name[:-1]
 
                 if tmp_class_name == class_name:
-                    bbox = left + " " + top + " " + right + " " +bottom
-                    bounding_boxes.append({"confidence":confidence, "file_id":file_id, "bbox":bbox})
+                    bbox = left + " " + top + " " + right + " " + bottom
+                    bounding_boxes.append({"confidence": confidence, "file_id": file_id, "bbox": bbox})
 
-        bounding_boxes.sort(key=lambda x:float(x['confidence']), reverse=True)
-        with open(TEMP_FILES_PATH + "/" + class_name + "_dr.json", 'w') as outfile:
+        bounding_boxes.sort(key=lambda x: float(x["confidence"]), reverse=True)
+        with open(TEMP_FILES_PATH + "/" + class_name + "_dr.json", "w") as outfile:
             json.dump(bounding_boxes, outfile)
 
     sum_AP = 0.0
     ap_dictionary = {}
     lamr_dictionary = {}
-    with open(RESULTS_FILES_PATH + "/results.txt", 'w') as results_file:
+    with open(RESULTS_FILES_PATH + "/results.txt", "w") as results_file:
         results_file.write("# AP and precision/recall per class\n")
         count_true_positives = {}
 
@@ -464,19 +485,19 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
             dr_file = TEMP_FILES_PATH + "/" + class_name + "_dr.json"
             dr_data = json.load(open(dr_file))
 
-            nd          = len(dr_data)
-            #TODO：Daixb202607221703 ---- 新增：按尺度初始化 tp/fp 字典 ----
+            nd = len(dr_data)
+            # TODO：Daixb202607221703 ---- 新增：按尺度初始化 tp/fp 字典 ----
             tp_dict = {scale: [0] * nd for scale in SCALE_NAMES}
             fp_dict = {scale: [0] * nd for scale in SCALE_NAMES}
-            #TODO：Daixb202607221703 ------------------------------------
+            # TODO：Daixb202607221703 ------------------------------------
 
-            tp          = [0] * nd
-            fp          = [0] * nd
-            score       = [0] * nd
+            tp = [0] * nd
+            fp = [0] * nd
+            score = [0] * nd
             score_threhold_idx = 0
             for idx, detection in enumerate(dr_data):
-                file_id     = detection["file_id"]
-                score[idx]  = float(detection["confidence"])
+                file_id = detection["file_id"]
+                score[idx] = float(detection["confidence"])
                 if score[idx] >= score_threhold:
                     score_threhold_idx = idx
 
@@ -497,35 +518,38 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
                         BLACK = [0, 0, 0]
                         img = cv2.copyMakeBorder(img, 0, bottom_border, 0, 0, cv2.BORDER_CONSTANT, value=BLACK)
 
-                gt_file             = TEMP_FILES_PATH + "/" + file_id + "_ground_truth.json"
-                ground_truth_data   = json.load(open(gt_file))
-                ovmax       = -1
-                gt_match    = -1
-                bb          = [float(x) for x in detection["bbox"].split()]
+                gt_file = TEMP_FILES_PATH + "/" + file_id + "_ground_truth.json"
+                ground_truth_data = json.load(open(gt_file))
+                ovmax = -1
+                gt_match = -1
+                bb = [float(x) for x in detection["bbox"].split()]
                 for obj in ground_truth_data:
                     if obj["class_name"] == class_name:
-                        bbgt    = [ float(x) for x in obj["bbox"].split() ]
-                        bi      = [max(bb[0],bbgt[0]), max(bb[1],bbgt[1]), min(bb[2],bbgt[2]), min(bb[3],bbgt[3])]
-                        iw      = bi[2] - bi[0] + 1
-                        ih      = bi[3] - bi[1] + 1
+                        bbgt = [float(x) for x in obj["bbox"].split()]
+                        bi = [max(bb[0], bbgt[0]), max(bb[1], bbgt[1]), min(bb[2], bbgt[2]), min(bb[3], bbgt[3])]
+                        iw = bi[2] - bi[0] + 1
+                        ih = bi[3] - bi[1] + 1
                         if iw > 0 and ih > 0:
-                            ua = (bb[2] - bb[0] + 1) * (bb[3] - bb[1] + 1) + (bbgt[2] - bbgt[0]
-                                            + 1) * (bbgt[3] - bbgt[1] + 1) - iw * ih
+                            ua = (
+                                (bb[2] - bb[0] + 1) * (bb[3] - bb[1] + 1)
+                                + (bbgt[2] - bbgt[0] + 1) * (bbgt[3] - bbgt[1] + 1)
+                                - iw * ih
+                            )
                             ov = iw * ih / ua
                             if ov > ovmax:
                                 ovmax = ov
                                 gt_match = obj
 
                 if show_animation:
-                    status = "NO MATCH FOUND!" 
-                    
+                    status = "NO MATCH FOUND!"
+
                 min_overlap = MINOVERLAP
 
-                if ovmax >= min_overlap:   #TODO：Daixb202607221703  原有代码。
+                if ovmax >= min_overlap:  # TODO：Daixb202607221703  原有代码。
                     if "difficult" not in gt_match:
                         if not bool(gt_match["used"]):
                             tp[idx] = 1
-                            #TODO：Daixb202607221735 新增：根据匹配到的 GT 尺度设置
+                            # TODO：Daixb202607221735 新增：根据匹配到的 GT 尺度设置
                             matched_scale = gt_match["scale"]
                             for s in SCALE_NAMES:
                                 if s == matched_scale:
@@ -538,8 +562,8 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
 
                             gt_match["used"] = True
                             count_true_positives[class_name] += 1
-                            with open(gt_file, 'w') as f:
-                                    f.write(json.dumps(ground_truth_data))
+                            with open(gt_file, "w") as f:
+                                f.write(json.dumps(ground_truth_data))
                             if show_animation:
                                 status = "MATCH!"
                         else:
@@ -548,7 +572,7 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
                                 status = "REPEATED MATCH!"
                 else:
                     fp[idx] = 1
-                    #TODO：Daixb202607221735  新增：所有尺度均为 FP
+                    # TODO：Daixb202607221735  新增：所有尺度均为 FP
                     for s in SCALE_NAMES:
                         tp_dict[s][idx] = 0
                         fp_dict[s][idx] = 1
@@ -558,55 +582,70 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
 
                 """                Draw image to show animation                """
                 if show_animation:
-                    height, widht = img.shape[:2]
-                    white           = (255,255,255)
-                    light_blue      = (255,200,100)
-                    green           = (0,255,0)
-                    light_red       = (30,30,255)
-                    margin          = 10
-                    # 1nd line
-                    v_pos           = int(height - margin - (bottom_border / 2.0))
-                    text            = "Image: " + ground_truth_img[0] + " "
+                    height, _widht = img.shape[:2]
+                    white = (255, 255, 255)
+                    light_blue = (255, 200, 100)
+                    green = (0, 255, 0)
+                    light_red = (30, 30, 255)
+                    margin = 10
+                    # 1st line
+                    v_pos = int(height - margin - (bottom_border / 2.0))
+                    text = "Image: " + ground_truth_img[0] + " "
                     img, line_width = draw_text_in_image(img, text, (margin, v_pos), white, 0)
-                    text            = "Class [" + str(class_index) + "/" + str(n_classes) + "]: " + class_name + " "
-                    img, line_width = draw_text_in_image(img, text, (margin + line_width, v_pos), light_blue, line_width)
+                    text = "Class [" + str(class_index) + "/" + str(n_classes) + "]: " + class_name + " "
+                    img, line_width = draw_text_in_image(
+                        img, text, (margin + line_width, v_pos), light_blue, line_width
+                    )
                     if ovmax != -1:
-                        color       = light_red
-                        if status   == "INSUFFICIENT OVERLAP":
-                            text    = "IoU: {0:.2f}% ".format(ovmax*100) + "< {0:.2f}% ".format(min_overlap*100)
+                        color = light_red
+                        if status == "INSUFFICIENT OVERLAP":
+                            text = f"IoU: {ovmax * 100:.2f}% " + f"< {min_overlap * 100:.2f}% "
                         else:
-                            text    = "IoU: {0:.2f}% ".format(ovmax*100) + ">= {0:.2f}% ".format(min_overlap*100)
-                            color   = green
+                            text = f"IoU: {ovmax * 100:.2f}% " + f">= {min_overlap * 100:.2f}% "
+                            color = green
                         img, _ = draw_text_in_image(img, text, (margin + line_width, v_pos), color, line_width)
                     # 2nd line
-                    v_pos           += int(bottom_border / 2.0)
-                    rank_pos        = str(idx+1)
-                    text            = "Detection #rank: " + rank_pos + " confidence: {0:.2f}% ".format(float(detection["confidence"])*100)
+                    v_pos += int(bottom_border / 2.0)
+                    rank_pos = str(idx + 1)
+                    text = (
+                        "Detection #rank: "
+                        + rank_pos
+                        + " confidence: {:.2f}% ".format(float(detection["confidence"]) * 100)
+                    )
                     img, line_width = draw_text_in_image(img, text, (margin, v_pos), white, 0)
-                    color           = light_red
+                    color = light_red
                     if status == "MATCH!":
                         color = green
-                    text            = "Result: " + status + " "
+                    text = "Result: " + status + " "
                     img, line_width = draw_text_in_image(img, text, (margin + line_width, v_pos), color, line_width)
 
                     font = cv2.FONT_HERSHEY_SIMPLEX
-                    if ovmax > 0: 
-                        bbgt = [ int(round(float(x))) for x in gt_match["bbox"].split() ]
-                        cv2.rectangle(img,(bbgt[0],bbgt[1]),(bbgt[2],bbgt[3]),light_blue,2)
-                        cv2.rectangle(img_cumulative,(bbgt[0],bbgt[1]),(bbgt[2],bbgt[3]),light_blue,2)
-                        cv2.putText(img_cumulative, class_name, (bbgt[0],bbgt[1] - 5), font, 0.6, light_blue, 1, cv2.LINE_AA)
+                    if ovmax > 0:
+                        bbgt = [round(float(x)) for x in gt_match["bbox"].split()]
+                        cv2.rectangle(img, (bbgt[0], bbgt[1]), (bbgt[2], bbgt[3]), light_blue, 2)
+                        cv2.rectangle(img_cumulative, (bbgt[0], bbgt[1]), (bbgt[2], bbgt[3]), light_blue, 2)
+                        cv2.putText(
+                            img_cumulative, class_name, (bbgt[0], bbgt[1] - 5), font, 0.6, light_blue, 1, cv2.LINE_AA
+                        )
                     bb = [int(i) for i in bb]
-                    cv2.rectangle(img,(bb[0],bb[1]),(bb[2],bb[3]),color,2)
-                    cv2.rectangle(img_cumulative,(bb[0],bb[1]),(bb[2],bb[3]),color,2)
-                    cv2.putText(img_cumulative, class_name, (bb[0],bb[1] - 5), font, 0.6, color, 1, cv2.LINE_AA)
+                    cv2.rectangle(img, (bb[0], bb[1]), (bb[2], bb[3]), color, 2)
+                    cv2.rectangle(img_cumulative, (bb[0], bb[1]), (bb[2], bb[3]), color, 2)
+                    cv2.putText(img_cumulative, class_name, (bb[0], bb[1] - 5), font, 0.6, color, 1, cv2.LINE_AA)
 
                     cv2.imshow("Animation", img)
-                    cv2.waitKey(20) 
-                    output_img_path = RESULTS_FILES_PATH + "/images/detections_one_by_one/" + class_name + "_detection" + str(idx) + ".jpg"
+                    cv2.waitKey(20)
+                    output_img_path = (
+                        RESULTS_FILES_PATH
+                        + "/images/detections_one_by_one/"
+                        + class_name
+                        + "_detection"
+                        + str(idx)
+                        + ".jpg"
+                    )
                     cv2.imwrite(output_img_path, img)
                     cv2.imwrite(img_cumulative_path, img_cumulative)
 
-            cumsum = 0   #TODO：Daixb202607221703  原有代码。
+            cumsum = 0  # TODO：Daixb202607221703  原有代码。
             for idx, val in enumerate(fp):
                 fp[idx] += cumsum
                 cumsum += val
@@ -618,45 +657,66 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
 
             rec = tp[:]
             for idx, val in enumerate(tp):
-                rec[idx] = float(tp[idx]) / np.maximum(gt_counter_per_class[class_name], 1)
+                rec[idx] = float(val) / np.maximum(gt_counter_per_class[class_name], 1)
 
             prec = tp[:]
             for idx, val in enumerate(tp):
-                prec[idx] = float(tp[idx]) / np.maximum((fp[idx] + tp[idx]), 1)
+                prec[idx] = float(val) / np.maximum((fp[idx] + val), 1)
 
             ap, mrec, mprec = voc_ap(rec[:], prec[:])
-            F1  = np.array(rec)*np.array(prec)*2 / np.where((np.array(prec)+np.array(rec))==0, 1, (np.array(prec)+np.array(rec)))
+            F1 = (
+                np.array(rec)
+                * np.array(prec)
+                * 2
+                / np.where((np.array(prec) + np.array(rec)) == 0, 1, (np.array(prec) + np.array(rec)))
+            )
 
-            sum_AP  += ap
-            text    = "{0:.2f}%".format(ap*100) + " = " + class_name + " AP " #class_name + " AP = {0:.2f}%".format(ap*100)
+            sum_AP += ap
+            text = f"{ap * 100:.2f}%" + " = " + class_name + " AP "  # class_name + " AP = {0:.2f}%".format(ap*100)
 
-            if len(prec)>0:
-                F1_text         = "{0:.2f}".format(F1[score_threhold_idx]) + " = " + class_name + " F1 "
-                Recall_text     = "{0:.2f}%".format(rec[score_threhold_idx]*100) + " = " + class_name + " Recall "
-                Precision_text  = "{0:.2f}%".format(prec[score_threhold_idx]*100) + " = " + class_name + " Precision "
+            if len(prec) > 0:
+                F1_text = f"{F1[score_threhold_idx]:.2f}" + " = " + class_name + " F1 "
+                Recall_text = f"{rec[score_threhold_idx] * 100:.2f}%" + " = " + class_name + " Recall "
+                Precision_text = f"{prec[score_threhold_idx] * 100:.2f}%" + " = " + class_name + " Precision "
             else:
-                F1_text         = "0.00" + " = " + class_name + " F1 "
-                Recall_text     = "0.00%" + " = " + class_name + " Recall "
-                Precision_text  = "0.00%" + " = " + class_name + " Precision "
+                F1_text = "0.00" + " = " + class_name + " F1 "
+                Recall_text = "0.00%" + " = " + class_name + " Recall "
+                Precision_text = "0.00%" + " = " + class_name + " Precision "
 
-            rounded_prec    = [ '%.2f' % elem for elem in prec ]
-            rounded_rec     = [ '%.2f' % elem for elem in rec ]
+            rounded_prec = [f"{elem:.2f}" for elem in prec]
+            rounded_rec = [f"{elem:.2f}" for elem in rec]
             results_file.write(text + "\n Precision: " + str(rounded_prec) + "\n Recall :" + str(rounded_rec) + "\n\n")
 
-            if len(prec)>0:
-                print(text + "\t||\tscore_threhold=" + str(score_threhold) + " : " + "F1=" + "{0:.2f}".format(F1[score_threhold_idx])\
-                    + " ; Recall=" + "{0:.2f}%".format(rec[score_threhold_idx]*100) + " ; Precision=" + "{0:.2f}%".format(prec[score_threhold_idx]*100))
+            if len(prec) > 0:
+                print(
+                    text
+                    + "\t||\tscore_threhold="
+                    + str(score_threhold)
+                    + " : "
+                    + "F1="
+                    + f"{F1[score_threhold_idx]:.2f}"
+                    + " ; Recall="
+                    + f"{rec[score_threhold_idx] * 100:.2f}%"
+                    + " ; Precision="
+                    + f"{prec[score_threhold_idx] * 100:.2f}%"
+                )
             else:
-                print(text + "\t||\tscore_threhold=" + str(score_threhold) + " : " + "F1=0.00% ; Recall=0.00% ; Precision=0.00%")
+                print(
+                    text
+                    + "\t||\tscore_threhold="
+                    + str(score_threhold)
+                    + " : "
+                    + "F1=0.00% ; Recall=0.00% ; Precision=0.00%"
+                )
             ap_dictionary[class_name] = ap
 
-            #TODO：Daixb202607221716 ---- 对每个尺度计算指标 ----
+            # TODO：Daixb202607221716 ---- 对每个尺度计算指标 ----
             ap_dict_scale = {}
             rec_dict_scale = {}
             prec_dict_scale = {}
             mr_dict_scale = {}
 
-            for scale in SCALE_NAMES:    # 累积 tp/fp
+            for scale in SCALE_NAMES:  # 累积 tp/fp
                 cumsum_tp = 0
                 cumsum_fp = 0
                 tp_cum = [0] * nd
@@ -677,7 +737,6 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
                     prec = [0.0] * nd
                     rec_th = 0.0  # 在 score_threhold 处的 recall/precision
                     prec_th = 0.0
-                    f1_th = 0.0
                 else:
                     rec = [tp_cum[i] / gt_total_scale for i in range(nd)]
                     prec = [tp_cum[i] / (tp_cum[i] + fp_cum[i] + 1e-10) for i in range(nd)]
@@ -688,13 +747,12 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
                         rec_th = rec[idx_th]
                         prec_th = prec[idx_th]
                         if rec_th + prec_th > 0:
-                            f1_th = 2 * rec_th * prec_th / (rec_th + prec_th)
+                            2 * rec_th * prec_th / (rec_th + prec_th)
                         else:
-                            f1_th = 0.0
+                            pass
                     else:
                         rec_th = 0.0
                         prec_th = 0.0
-                        f1_th = 0.0
 
                 ap_dict_scale[scale] = ap
                 rec_dict_scale[scale] = rec_th
@@ -725,7 +783,9 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
                     f1_val = 2 * rec_val * prec_val / (rec_val + prec_val) / 100.0
                 else:
                     f1_val = 0.0
-                print(f"  Scale {scale}: AP@0.5={ap_val:.2f}%, MR={mr_val:.2f}%, Recall={rec_val:.2f}%, Precision={prec_val:.2f}%, F1={f1_val:.2f}")
+                print(
+                    f"  Scale {scale}: AP@0.5={ap_val:.2f}%, MR={mr_val:.2f}%, Recall={rec_val:.2f}%, Precision={prec_val:.2f}%, F1={f1_val:.2f}"
+                )
 
             # 原有全局 ap_dictionary 仍然保留（用于绘图，但这里我们只存整体 AP？）
             # 为保持兼容，我们将整体 AP（不分尺度）设为所有尺度的平均？或保留原计算（原代码计算的是所有尺度的混合 AP）
@@ -736,88 +796,90 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
             # 所以我们保留原有的混合计算（约 380 行附近），但将上面的尺度计算放在它之前或之后，不影响。
 
             n_images = counter_images_per_class[class_name]
-            lamr, mr, fppi = log_average_miss_rate(np.array(rec), np.array(fp), n_images)
+            lamr, mr, _fppi = log_average_miss_rate(np.array(rec), np.array(fp), n_images)
             lamr_dictionary[class_name] = lamr
 
             if draw_plot:
-                plt.plot(rec, prec, '-o')
-                area_under_curve_x = mrec[:-1] + [mrec[-2]] + [mrec[-1]]
-                area_under_curve_y = mprec[:-1] + [0.0] + [mprec[-1]]
-                plt.fill_between(area_under_curve_x, 0, area_under_curve_y, alpha=0.2, edgecolor='r')
+                plt.plot(rec, prec, "-o")
+                area_under_curve_x = [*mrec[:-1], mrec[-2], mrec[-1]]
+                area_under_curve_y = [*mprec[:-1], 0.0, mprec[-1]]
+                plt.fill_between(area_under_curve_x, 0, area_under_curve_y, alpha=0.2, edgecolor="r")
 
                 fig = plt.gcf()
                 # fig.canvas.set_window_title('AP ' + class_name)
-                fig.canvas.manager.set_window_title('AP ' + class_name)  #TODO: Daixb20260722 改进 ： fig.canvas.set_window_title - fig.canvas.manager.set_window_title
+                fig.canvas.manager.set_window_title(
+                    "AP " + class_name
+                )  # TODO: Daixb20260722 改进 ： fig.canvas.set_window_title - fig.canvas.manager.set_window_title
 
-                plt.title('class: ' + text)
-                plt.xlabel('Recall')
-                plt.ylabel('Precision')
+                plt.title("class: " + text)
+                plt.xlabel("Recall")
+                plt.ylabel("Precision")
                 axes = plt.gca()
-                axes.set_xlim([0.0,1.0])
-                axes.set_ylim([0.0,1.05]) 
+                axes.set_xlim([0.0, 1.0])
+                axes.set_ylim([0.0, 1.05])
                 fig.savefig(RESULTS_FILES_PATH + "/AP/" + class_name + ".png")
                 plt.cla()
 
-                plt.plot(score, F1, "-", color='orangered')
-                plt.title('class: ' + F1_text + "\nscore_threhold=" + str(score_threhold))
-                plt.xlabel('Score_Threhold')
-                plt.ylabel('F1')
+                plt.plot(score, F1, "-", color="orangered")
+                plt.title("class: " + F1_text + "\nscore_threhold=" + str(score_threhold))
+                plt.xlabel("Score_Threhold")
+                plt.ylabel("F1")
                 axes = plt.gca()
-                axes.set_xlim([0.0,1.0])
-                axes.set_ylim([0.0,1.05])
+                axes.set_xlim([0.0, 1.0])
+                axes.set_ylim([0.0, 1.05])
                 fig.savefig(RESULTS_FILES_PATH + "/F1/" + class_name + ".png")
                 plt.cla()
 
-                plt.plot(score, rec, "-H", color='gold')
-                plt.title('class: ' + Recall_text + "\nscore_threhold=" + str(score_threhold))
-                plt.xlabel('Score_Threhold')
-                plt.ylabel('Recall')
+                plt.plot(score, rec, "-H", color="gold")
+                plt.title("class: " + Recall_text + "\nscore_threhold=" + str(score_threhold))
+                plt.xlabel("Score_Threhold")
+                plt.ylabel("Recall")
                 axes = plt.gca()
-                axes.set_xlim([0.0,1.0])
-                axes.set_ylim([0.0,1.05])
+                axes.set_xlim([0.0, 1.0])
+                axes.set_ylim([0.0, 1.05])
                 fig.savefig(RESULTS_FILES_PATH + "/Recall/" + class_name + ".png")
                 plt.cla()
 
-                plt.plot(score, prec, "-s", color='palevioletred')
-                plt.title('class: ' + Precision_text + "\nscore_threhold=" + str(score_threhold))
-                plt.xlabel('Score_Threhold')
-                plt.ylabel('Precision')
+                plt.plot(score, prec, "-s", color="palevioletred")
+                plt.title("class: " + Precision_text + "\nscore_threhold=" + str(score_threhold))
+                plt.xlabel("Score_Threhold")
+                plt.ylabel("Precision")
                 axes = plt.gca()
-                axes.set_xlim([0.0,1.0])
-                axes.set_ylim([0.0,1.05])
+                axes.set_xlim([0.0, 1.0])
+                axes.set_ylim([0.0, 1.05])
                 fig.savefig(RESULTS_FILES_PATH + "/Precision/" + class_name + ".png")
                 plt.cla()
-                
+
         if show_animation:
             cv2.destroyAllWindows()
         if n_classes == 0:
             print("未检测到任何种类，请检查标签信息与get_map.py中的classes_path是否修改。")
             return 0
         results_file.write("\n# mAP of all classes\n")
-        mAP     = sum_AP / n_classes
-        text    = "mAP = {0:.2f}%".format(mAP*100)
+        mAP = sum_AP / n_classes
+        text = f"mAP = {mAP * 100:.2f}%"
         results_file.write(text + "\n")
         print(text)
 
-    #TODO: Daixb202607222024 新增： ---- 打印各类别的整体 MR ----
-    print("\nOverall MR per class (at score_threhold={:.2f}):".format(score_threhold))
+    # TODO: Daixb202607222024 新增： ---- 打印各类别的整体 MR ----
+    print(f"\nOverall MR per class (at score_threhold={score_threhold:.2f}):")
     for cls, mr in overall_mr_dict.items():
-        print("  {}: MR = {:.2f}%".format(cls, mr * 100))
+        print(f"  {cls}: MR = {mr * 100:.2f}%")
     # 打印所有类别的平均 MR
     if overall_mr_dict:
         avg_mr_all = sum(overall_mr_dict.values()) / len(overall_mr_dict)
-        print("  Average MR (all classes): {:.2f}%".format(avg_mr_all * 100))
+        print(f"  Average MR (all classes): {avg_mr_all * 100:.2f}%")
     else:
         print("  No classes found.")
 
-    #TODO: Daixb202607222024 新增： ---- 打印各尺度的平均 MR ----
+    # TODO: Daixb202607222024 新增： ---- 打印各尺度的平均 MR ----
     print("\nAverage MR per scale:")
     for scale in SCALE_NAMES:
         if scale_mr_collection[scale]:
             avg_mr = sum(scale_mr_collection[scale]) / len(scale_mr_collection[scale])
-            print("  {}: Average MR = {:.2f}%".format(scale, avg_mr * 100))
+            print(f"  {scale}: Average MR = {avg_mr * 100:.2f}%")
         else:
-            print("  {}: No data".format(scale))
+            print(f"  {scale}: No data")
     # TODO: Daixb202607222024 新增： ---- ---- ---- ---- ---- ---- ---- ---- ----
     shutil.rmtree(TEMP_FILES_PATH)
 
@@ -838,7 +900,7 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
     """
     Write number of ground-truth objects per class to results.txt
     """
-    with open(RESULTS_FILES_PATH + "/results.txt", 'a') as results_file:
+    with open(RESULTS_FILES_PATH + "/results.txt", "a") as results_file:
         results_file.write("\n# Number of ground-truth objects per class\n")
         for class_name in sorted(gt_counter_per_class):
             results_file.write(class_name + ": " + str(gt_counter_per_class[class_name]) + "\n")
@@ -853,7 +915,7 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
     """
     Write number of detected objects per class to results.txt
     """
-    with open(RESULTS_FILES_PATH + "/results.txt", 'a') as results_file:
+    with open(RESULTS_FILES_PATH + "/results.txt", "a") as results_file:
         results_file.write("\n# Number of detected objects per class\n")
         for class_name in sorted(dr_classes):
             n_det = det_counter_per_class[class_name]
@@ -863,7 +925,7 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
             results_file.write(text)
 
     """
-    Plot the total number of occurences of each class in the ground-truth
+    Plot the total number of occurrences of each class in the ground-truth
     """
     if draw_plot:
         window_title = "ground-truth-info"
@@ -872,7 +934,7 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
         x_label = "Number of objects per class"
         output_path = RESULTS_FILES_PATH + "/ground-truth-info.png"
         to_show = False
-        plot_color = 'forestgreen'
+        plot_color = "forestgreen"
         draw_plot_func(
             gt_counter_per_class,
             n_classes,
@@ -882,11 +944,11 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
             output_path,
             to_show,
             plot_color,
-            '',
-            )
+            "",
+        )
 
     # """
-    # Plot the total number of occurences of each class in the "detection-results" folder
+    # Plot the total number of occurrences of each class in the "detection-results" folder
     # """
     # if draw_plot:
     #     window_title = "detection-results-info"
@@ -922,161 +984,157 @@ def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path='map_out', scale_eva
         x_label = "log-average miss rate"
         output_path = RESULTS_FILES_PATH + "/lamr.png"
         to_show = False
-        plot_color = 'royalblue'
+        plot_color = "royalblue"
         draw_plot_func(
-            lamr_dictionary,
-            n_classes,
-            window_title,
-            plot_title,
-            x_label,
-            output_path,
-            to_show,
-            plot_color,
-            ""
-            )
+            lamr_dictionary, n_classes, window_title, plot_title, x_label, output_path, to_show, plot_color, ""
+        )
 
     """
     Draw mAP plot (Show AP's of all classes in decreasing order)
     """
     if draw_plot:
         window_title = "mAP"
-        plot_title = "mAP = {0:.2f}%".format(mAP*100)
+        plot_title = f"mAP = {mAP * 100:.2f}%"
         x_label = "Average Precision"
         output_path = RESULTS_FILES_PATH + "/mAP.png"
         to_show = True
-        plot_color = 'royalblue'
+        plot_color = "royalblue"
         draw_plot_func(
-            ap_dictionary,
-            n_classes,
-            window_title,
-            plot_title,
-            x_label,
-            output_path,
-            to_show,
-            plot_color,
-            ""
-            )
+            ap_dictionary, n_classes, window_title, plot_title, x_label, output_path, to_show, plot_color, ""
+        )
     return mAP
 
+
 def preprocess_gt(gt_path, class_names):
-    image_ids   = os.listdir(gt_path)
+    image_ids = os.listdir(gt_path)
     results = {}
 
     images = []
     bboxes = []
     for i, image_id in enumerate(image_ids):
-        lines_list      = file_lines_to_list(os.path.join(gt_path, image_id))
+        lines_list = file_lines_to_list(os.path.join(gt_path, image_id))
         boxes_per_image = []
-        image           = {}
-        image_id        = os.path.splitext(image_id)[0]
-        image['file_name'] = image_id + '.jpg'
-        image['width']     = 1
-        image['height']    = 1
-        #-----------------------------------------------------------------#
+        image = {}
+        image_id = os.path.splitext(image_id)[0]
+        image["file_name"] = image_id + ".jpg"
+        image["width"] = 1
+        image["height"] = 1
+        # -----------------------------------------------------------------#
         #   感谢 多学学英语吧 的提醒
         #   解决了'Results do not correspond to current coco set'问题
-        #-----------------------------------------------------------------#
-        image['id']        = str(image_id)
+        # -----------------------------------------------------------------#
+        image["id"] = str(image_id)
 
         for line in lines_list:
-            difficult = 0 
+            difficult = 0
             if "difficult" in line:
-                line_split  = line.split()
+                line_split = line.split()
                 left, top, right, bottom, _difficult = line_split[-5:]
-                class_name  = ""
+                class_name = ""
                 for name in line_split[:-5]:
                     class_name += name + " "
-                class_name  = class_name[:-1]
+                class_name = class_name[:-1]
                 difficult = 1
             else:
-                line_split  = line.split()
+                line_split = line.split()
                 left, top, right, bottom = line_split[-4:]
-                class_name  = ""
+                class_name = ""
                 for name in line_split[:-4]:
                     class_name += name + " "
                 class_name = class_name[:-1]
-            
+
             left, top, right, bottom = float(left), float(top), float(right), float(bottom)
             if class_name not in class_names:
                 continue
-            cls_id  = class_names.index(class_name) + 1
-            bbox    = [left, top, right - left, bottom - top, difficult, str(image_id), cls_id, (right - left) * (bottom - top) - 10.0]
+            cls_id = class_names.index(class_name) + 1
+            bbox = [
+                left,
+                top,
+                right - left,
+                bottom - top,
+                difficult,
+                str(image_id),
+                cls_id,
+                (right - left) * (bottom - top) - 10.0,
+            ]
             boxes_per_image.append(bbox)
         images.append(image)
         bboxes.extend(boxes_per_image)
-    results['images']        = images
+    results["images"] = images
 
     categories = []
     for i, cls in enumerate(class_names):
         category = {}
-        category['supercategory']   = cls
-        category['name']            = cls
-        category['id']              = i + 1
+        category["supercategory"] = cls
+        category["name"] = cls
+        category["id"] = i + 1
         categories.append(category)
-    results['categories']   = categories
+    results["categories"] = categories
 
     annotations = []
     for i, box in enumerate(bboxes):
         annotation = {}
-        annotation['area']        = box[-1]
-        annotation['category_id'] = box[-2]
-        annotation['image_id']    = box[-3]
-        annotation['iscrowd']     = box[-4]
-        annotation['bbox']        = box[:4]
-        annotation['id']          = i
+        annotation["area"] = box[-1]
+        annotation["category_id"] = box[-2]
+        annotation["image_id"] = box[-3]
+        annotation["iscrowd"] = box[-4]
+        annotation["bbox"] = box[:4]
+        annotation["id"] = i
         annotations.append(annotation)
-    results['annotations'] = annotations
+    results["annotations"] = annotations
     return results
+
 
 def preprocess_dr(dr_path, class_names):
     image_ids = os.listdir(dr_path)
     results = []
     for image_id in image_ids:
-        lines_list      = file_lines_to_list(os.path.join(dr_path, image_id))
-        image_id        = os.path.splitext(image_id)[0]
+        lines_list = file_lines_to_list(os.path.join(dr_path, image_id))
+        image_id = os.path.splitext(image_id)[0]
         for line in lines_list:
-            line_split  = line.split()
+            line_split = line.split()
             confidence, left, top, right, bottom = line_split[-5:]
-            class_name  = ""
+            class_name = ""
             for name in line_split[:-5]:
                 class_name += name + " "
-            class_name  = class_name[:-1]
+            class_name = class_name[:-1]
             left, top, right, bottom = float(left), float(top), float(right), float(bottom)
-            result                  = {}
-            result["image_id"]      = str(image_id)
+            result = {}
+            result["image_id"] = str(image_id)
             if class_name not in class_names:
                 continue
-            result["category_id"]   = class_names.index(class_name) + 1
-            result["bbox"]          = [left, top, right - left, bottom - top]
-            result["score"]         = float(confidence)
+            result["category_id"] = class_names.index(class_name) + 1
+            result["bbox"] = [left, top, right - left, bottom - top]
+            result["score"] = float(confidence)
             results.append(result)
     return results
- 
+
+
 def get_coco_map(class_names, path):
-    GT_PATH     = os.path.join(path, 'ground-truth')
-    DR_PATH     = os.path.join(path, 'detection-results')
-    COCO_PATH   = os.path.join(path, 'coco_eval')
+    GT_PATH = os.path.join(path, "ground-truth")
+    DR_PATH = os.path.join(path, "detection-results")
+    COCO_PATH = os.path.join(path, "coco_eval")
 
     if not os.path.exists(COCO_PATH):
         os.makedirs(COCO_PATH)
 
-    GT_JSON_PATH = os.path.join(COCO_PATH, 'instances_gt.json')
-    DR_JSON_PATH = os.path.join(COCO_PATH, 'instances_dr.json')
+    GT_JSON_PATH = os.path.join(COCO_PATH, "instances_gt.json")
+    DR_JSON_PATH = os.path.join(COCO_PATH, "instances_dr.json")
 
     with open(GT_JSON_PATH, "w") as f:
-        results_gt  = preprocess_gt(GT_PATH, class_names)
+        results_gt = preprocess_gt(GT_PATH, class_names)
         json.dump(results_gt, f, indent=4)
 
     with open(DR_JSON_PATH, "w") as f:
-        results_dr  = preprocess_dr(DR_PATH, class_names)
+        results_dr = preprocess_dr(DR_PATH, class_names)
         json.dump(results_dr, f, indent=4)
         if len(results_dr) == 0:
             print("未检测到任何目标。")
             return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-    cocoGt      = COCO(GT_JSON_PATH)
-    cocoDt      = cocoGt.loadRes(DR_JSON_PATH)
-    cocoEval    = COCOeval(cocoGt, cocoDt, 'bbox') 
+    cocoGt = COCO(GT_JSON_PATH)
+    cocoDt = cocoGt.loadRes(DR_JSON_PATH)
+    cocoEval = COCOeval(cocoGt, cocoDt, "bbox")
     cocoEval.evaluate()
     cocoEval.accumulate()
     cocoEval.summarize()
