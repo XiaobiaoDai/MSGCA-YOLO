@@ -23,9 +23,11 @@ from .block import (
     C2PSA,
     C3,
     C3TR,
+    CACBL,  # TODO： Daixb202607141607 新增坐标注意力CACBL
     CIB,
     DFL,
     ELAN1,
+    MSGA,  # TODO： Daixb202607141607 新增多尺度注意力MSGA
     PSA,
     SPP,
     SPPELAN,
@@ -59,8 +61,6 @@ from .block import (
     ResNetLayer,
     SCDown,
     TorchVision,
-    MSGA,  #TODO： Daixb202607141607 新增多尺度注意力MSGA
-    CACBL,  #TODO： Daixb202607141607 新增坐标注意力CACBL
 )
 from .conv import (
     CBAM,
@@ -116,11 +116,13 @@ __all__ = (
     "C2PSA",
     "C3",
     "C3TR",
+    "CACBL",  # TODO： Daixb202607141607 新增坐标注意力CACBL
     "CBAM",
     "CIB",
     "DFL",
     "ELAN1",
     "MLP",
+    "MSGA",  # TODO： Daixb202607141607 新增多尺度注意力MSGA
     "OBB",
     "OBB26",
     "PSA",
@@ -191,6 +193,4 @@ __all__ = (
     "YOLOESegment",
     "YOLOESegment26",
     "v10Detect",
-    "MSGA", #TODO： Daixb202607141607 新增多尺度注意力MSGA
-    "CACBL", # TODO： Daixb202607141607 新增坐标注意力CACBL
 )
