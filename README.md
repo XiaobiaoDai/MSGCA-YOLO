@@ -1,59 +1,49 @@
 # MSGCA-YOLO: Nighttime Pedestrian Detection Model
 
-本项目是论文 **"MSGCA-YOLO: A Nighttime Pedestrian Detection Model Combining Multi-scale Global Attention and Coordinate Attention"** 的官方代码库。
+This repository contains the official implementation for the paper: **"MSGCA-YOLO: A Nighttime Pedestrian Detection Model Combining Multi-scale Global Attention and Coordinate Attention"**.
 
-## 📖 简介
+## 📖 Introduction
 
-夜间行人检测对自动驾驶至关重要，但低对比度成像加剧了尺度剧烈变化和背景干扰，使检测变得困难。本文提出了一种基于 YOLOv4 的检测器 **MSGCA-YOLO**，创新性地集成了**多尺度全局注意力（MSGA）**和**坐标注意力卷积模块（CACBL）**：
-- **MSGA** 使用三个不同感受野的卷积核（3×3, 5×5, 7×7）捕获多尺度上下文线索，并通过空间自注意力机制建立长程依赖，强化对不同尺寸目标的全局感知。
-- **CACBL** 通过坐标注意力和内容引导策略自适应地重新加权深层语义特征和浅层空间细节，缓解多层特征聚合过程中的语义冲突。
+Nighttime pedestrian detection is critical for autonomous driving. However, low-contrast imaging exacerbates drastic scale variations and background interference, making reliable detection challenging. We propose **MSGCA-YOLO**, a YOLOv4-based detector that innovatively integrates **Multi-Scale Global Attention (MSGA)** and a **Coordinate-Attention Convolutional Block (CACBL)**:
+- **MSGA** utilizes three convolution branches with different receptive fields (3×3, 5×5, and 7×7) to capture multi-scale contextual cues. It further establishes long-range dependencies via a spatial self-attention mechanism, strengthening global perception for targets of varying sizes.
+- **CACBL** adaptively re-weights deep semantic features and shallow spatial details through coordinate attention and content-guided strategies, alleviating semantic conflicts during multi-level feature aggregation.
 
-我们在大规模的夜间行人数据集 **NIRPed** 上进行了系统实验。结果表明，MSGCA-YOLO 达到了 **90.86% mAP@0.5**，显著优于基线模型。同时，该模块作为即插即用组件，在 YOLOv8s 和 YOLOv10s 上也取得了稳定的性能提升。
+Systematic experiments were conducted on the large-scale nighttime pedestrian dataset **NIRPed**. Results demonstrate that MSGCA-YOLO achieves **90.86% mAP@0.5**, significantly outperforming the baseline. Furthermore, as a plug-and-play component, our modules also yield consistent performance improvements on modern architectures such as YOLOv8s and YOLOv10s.
 
-## 📂 数据集
+## 📂 Dataset
 
-本实验使用第三方公开数据集 **NIRPed**：
-- **完整数据集 (约 150GB)**：[点击此处访问下载链接（科学数据银行）](https://doi.org/10.57760/sciencedb.010h2)
-- **miniNIRPed（轻量版）**：可在 [XiaobiaoDai/NIRPed](https://github.com/XiaobiaoDai/NIRPed) 仓库中获取。
+The experiments use the third-party public dataset **NIRPed**:
+- **Full Dataset (approx. 150GB)**: [Click here to access the download link (Science Data Bank)](https://doi.org/10.57760/sciencedb.010h2)
+- **miniNIRPed (Lightweight version)**: Available in the [XiaobiaoDai/NIRPed](https://github.com/XiaobiaoDai/NIRPed) repository.
 
-> **注意**：作者无权直接分发 NIRPed 数据集。请使用上述链接自行下载并按照 YOLO 格式组织数据。
+> **Note**: The authors are not authorized to distribute the NIRPed dataset directly. Please download it using the links above and organize the data in YOLO format.
 
-## 🚀 环境配置
+## 🚀 Environment Setup
 
 - **Python** >= 3.8
 - **PyTorch** >= 1.8
-- **Ultralytics** (用于 YOLOv8s/v10s 实验) 
-- 推荐使用 Conda 管理环境。
+- **Ultralytics** (for YOLOv8s/v10s experiments)
 
 ```bash
-# 安装基础依赖
+# Install basic dependencies
 pip install -r requirements.txt
-🏋️ 模型权重
-由于预训练权重文件较大，暂未直接上传至 GitHub。请从以下链接下载：
+💻 Training and Testing
+This project provides the complete model configuration files and training scripts. Please refer to trainYolo.py and the .yaml configuration files in the models/ directory.
 
-MSGCA-YOLO (YOLOv4 基线)：[此处预留百度网盘或 Google Drive 链接，提取码: xxxx]
-
-YOLOv8s + MSGCA：[此处预留百度网盘链接]
-
-YOLOv10s + MSGCA：[此处预留百度网盘链接]
-
-将下载的 .pt 或 .pth 权重文件放置于 weights/ 目录下。
-
-💻 训练与测试
-训练
-使用以下命令启动 MSGCA-YOLO 的训练：
+Training
+Use the following command to start training the MSGCA-YOLO model (taking the YOLOv10s variant as an example):
 
 bash
 python trainYolo.py --data data/nirped.yaml --cfg models/yolov10s_MSGCA.yaml --weights '' --batch-size 56 --epochs 120
-测试
-使用以下命令测试模型性能：
+Testing / Validation
+After training, use the following command for validation or testing:
 
 bash
-python test.py --data data/nirped.yaml --weights weights/MSGCA-YOLO.pt --batch-size 1
-(注意：请根据您实际的文件名调整上述命令)
+python val.py --data data/nirped.yaml --weights runs/train/exp/weights/best.pt --batch-size 1
+(Note: Please adjust the commands based on your actual file paths)
 
-📜 引用
-如果您在研究中使用了本项目的代码或思路，请引用我们的论文：
+📜 Citation
+If you use the code or ideas from this project in your research, please cite our paper:
 
 bibtex
 @article{dai2026msgca,
@@ -63,5 +53,5 @@ bibtex
   year={2026},
   publisher={Public Library of Science}
 }
-⚖️ 许可证
-本项目采用 MIT License 许可协议。
+⚖️ License
+This project is licensed under the MIT License.

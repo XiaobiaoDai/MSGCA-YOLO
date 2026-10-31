@@ -23,34 +23,24 @@
 - **Python** >= 3.8
 - **PyTorch** >= 1.8
 - **Ultralytics** (用于 YOLOv8s/v10s 实验) 
-- 推荐使用 Conda 管理环境。
 
 ```bash
 # 安装基础依赖
 pip install -r requirements.txt
-🏋️ 模型权重
-由于预训练权重文件较大，暂未直接上传至 GitHub。请从以下链接下载：
-
-MSGCA-YOLO (YOLOv4 基线)：[此处预留百度网盘或 Google Drive 链接，提取码: xxxx]
-
-YOLOv8s + MSGCA：[此处预留百度网盘链接]
-
-YOLOv10s + MSGCA：[此处预留百度网盘链接]
-
-将下载的 .pt 或 .pth 权重文件放置于 weights/ 目录下。
-
 💻 训练与测试
+本项目提供了完整的模型配置文件和训练脚本，请参考 trainYolo.py 及 models/ 目录下的 .yaml 配置文件。
+
 训练
-使用以下命令启动 MSGCA-YOLO 的训练：
+使用以下命令启动 MSGCA-YOLO 模型的训练（以 YOLOv10s 变体为例）：
 
 bash
 python trainYolo.py --data data/nirped.yaml --cfg models/yolov10s_MSGCA.yaml --weights '' --batch-size 56 --epochs 120
 测试
-使用以下命令测试模型性能：
+训练完成后，使用以下命令进行验证或测试：
 
 bash
-python test.py --data data/nirped.yaml --weights weights/MSGCA-YOLO.pt --batch-size 1
-(注意：请根据您实际的文件名调整上述命令)
+python val.py --data data/nirped.yaml --weights runs/train/exp/weights/best.pt --batch-size 1
+(注意：请根据您实际的文件路径调整命令)
 
 📜 引用
 如果您在研究中使用了本项目的代码或思路，请引用我们的论文：
