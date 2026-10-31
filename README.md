@@ -5,6 +5,7 @@ This repository contains the official implementation for the paper: **"MSGCA-YOL
 ## 📖 Introduction
 
 Nighttime pedestrian detection is critical for autonomous driving. However, low-contrast imaging exacerbates drastic scale variations and background interference, making reliable detection challenging. We propose **MSGCA-YOLO**, a YOLOv4-based detector that innovatively integrates **Multi-Scale Global Attention (MSGA)** and a **Coordinate-Attention Convolutional Block (CACBL)**:
+
 - **MSGA** utilizes three convolution branches with different receptive fields (3×3, 5×5, and 7×7) to capture multi-scale contextual cues. It further establishes long-range dependencies via a spatial self-attention mechanism, strengthening global perception for targets of varying sizes.
 - **CACBL** adaptively re-weights deep semantic features and shallow spatial details through coordinate attention and content-guided strategies, alleviating semantic conflicts during multi-level feature aggregation.
 
@@ -13,6 +14,7 @@ Systematic experiments were conducted on the large-scale nighttime pedestrian da
 ## 📂 Dataset
 
 The experiments use the third-party public dataset **NIRPed**:
+
 - **Full Dataset (approx. 150GB)**: [Click here to access the download link (Science Data Bank)](https://doi.org/10.57760/sciencedb.010h2)
 - **miniNIRPed (Lightweight version)**: Available in the [XiaobiaoDai/NIRPed](https://github.com/XiaobiaoDai/NIRPed) repository.
 
@@ -56,3 +58,4 @@ bibtex
 }
 ⚖️ License
 This project is licensed under the MIT License.
+```
