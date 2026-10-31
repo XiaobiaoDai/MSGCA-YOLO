@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
@@ -21,6 +21,7 @@ __all__ = (
     "CIB",
     "DFL",
     "ELAN1",
+    "MSGA",
     "PSA",
     "SPP",
     "SPPELAN",
@@ -52,7 +53,6 @@ __all__ = (
     "ResNetLayer",
     "SCDown",
     "TorchVision",
-    "MSGA",
 )
 
 
@@ -2074,9 +2074,10 @@ class RealNVP(nn.Module):
         return self.prior.log_prob(z) + log_det
 
 
-#TODO: Daixb202607141544 ===添加注意力MSGA到 block.py 末尾 ====================
+# TODO: Daixb202607141544 ===添加注意力MSGA到 block.py 末尾 ====================
 class ChannelAttention(nn.Module):
-    """通道注意力模块 (CA)"""
+    """通道注意力模块 (CA)."""
+
     def __init__(self, in_channels, reduction=16):
         super().__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
@@ -2084,7 +2085,7 @@ class ChannelAttention(nn.Module):
         self.fc = nn.Sequential(
             nn.Conv2d(in_channels, in_channels // reduction, 1, bias=False),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels // reduction, in_channels, 1, bias=False)
+            nn.Conv2d(in_channels // reduction, in_channels, 1, bias=False),
         )
         self.sigmoid = nn.Sigmoid()
 
@@ -2094,11 +2095,13 @@ class ChannelAttention(nn.Module):
         out = avg_out + max_out
         return x * self.sigmoid(out)
 
-class SpatialAttention(nn.Module): #TODO： Daixb202607141607 新增多尺度注意力MSGA之空间注意力
-    """空间注意力模块 (SA)"""
+
+class SpatialAttention(nn.Module):  # TODO： Daixb202607141607 新增多尺度注意力MSGA之空间注意力
+    """空间注意力模块 (SA)."""
+
     def __init__(self, kernel_size=7):
         super().__init__()
-        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size // 2, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
@@ -2108,11 +2111,11 @@ class SpatialAttention(nn.Module): #TODO： Daixb202607141607 新增多尺度注
         out = self.conv(out)
         return x * self.sigmoid(out)
 
-class MSGA(nn.Module):   #TODO： Daixb202607141607 新增多尺度注意力MSGA
+
+class MSGA(nn.Module):  # TODO： Daixb202607141607 新增多尺度注意力MSGA
+    """Multi-Scale Global Attention 模块 输入: (B, C, H, W) 输出: (B, C, H, W).
     """
-    Multi-Scale Global Attention 模块
-    输入: (B, C, H, W)  输出: (B, C, H, W)
-    """
+
     def __init__(self, in_channels, out_channels=None):
         super().__init__()
         out_channels = out_channels or in_channels
@@ -2141,8 +2144,10 @@ class MSGA(nn.Module):   #TODO： Daixb202607141607 新增多尺度注意力MSGA
         out = self.sa(out)
         return out
 
-class CoordinateAttention(nn.Module): #TODO： Daixb202607141655 新增坐标注意力CA
-    """Coordinate Attention module"""
+
+class CoordinateAttention(nn.Module):  # TODO： Daixb202607141655 新增坐标注意力CA
+    """Coordinate Attention module."""
+
     def __init__(self, in_channels, reduction=32):
         super().__init__()
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
@@ -2156,7 +2161,7 @@ class CoordinateAttention(nn.Module): #TODO： Daixb202607141655 新增坐标注
 
     def forward(self, x):
         identity = x
-        n, c, h, w = x.size()
+        _n, _c, h, w = x.size()
         x_h = self.pool_h(x)  # (n,c,h,1)
         x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (n,c,w,1) -> (n,c,1,w) ?
         # 标准实现：将两个方向的特征拼接
@@ -2176,8 +2181,10 @@ class CoordinateAttention(nn.Module): #TODO： Daixb202607141655 新增坐标注
         out = identity * a_w * a_h
         return out
 
-class CACBLBlock(nn.Module):  #TODO： Daixb202607141655 新增坐标注意力CA
-    """Basic block for CACBL: Grouped Conv + Channel Shuffle + CA + residual"""
+
+class CACBLBlock(nn.Module):  # TODO： Daixb202607141655 新增坐标注意力CA
+    """Basic block for CACBL: Grouped Conv + Channel Shuffle + CA + residual."""
+
     def __init__(self, in_channels, out_channels, groups=4, reduction=32):
         super().__init__()
         self.groups = groups
@@ -2201,8 +2208,10 @@ class CACBLBlock(nn.Module):  #TODO： Daixb202607141655 新增坐标注意力CA
         out = self.ca(out)
         return out + self.shortcut(identity)
 
-class CACBL(nn.Module): #TODO： Daixb202607141655 新增坐标注意力CACBL
-    """CACBL module: similar to C2f but uses CACBLBlock with grouped conv, shuffle, and CA"""
+
+class CACBL(nn.Module):  # TODO： Daixb202607141655 新增坐标注意力CACBL
+    """CACBL module: similar to C2f but uses CACBLBlock with grouped conv, shuffle, and CA."""
+
     def __init__(self, in_channels, out_channels, n=1, shortcut=True, groups=4, reduction=32):
         super().__init__()
         self.c = int(out_channels // 2)  # 一半通道用于 shortcut
