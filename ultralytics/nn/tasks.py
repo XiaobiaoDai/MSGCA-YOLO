@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
@@ -18,7 +18,9 @@ from ultralytics.nn.modules import (
     C2PSA,
     C3,
     C3TR,
+    CACBL,  # TODO： Daixb202607141607 新增坐标注意力CACBL
     ELAN1,
+    MSGA,  # TODO： Daixb202607141607 新增多尺度注意力MSGA
     OBB,
     OBB26,
     PSA,
@@ -73,8 +75,6 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    MSGA,    #TODO： Daixb202607141607 新增多尺度注意力MSGA
-    CACBL,  # TODO： Daixb202607141607 新增坐标注意力CACBL
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -1849,7 +1849,7 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
-            CACBL,  #TODO： Daixb202607141716 新增坐标注意力CACBL
+            CACBL,  # TODO： Daixb202607141716 新增坐标注意力CACBL
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1910,9 +1910,7 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
-        elif m is AIFI:
-            args = [ch[f], *args]
-        elif m is MSGA:  #TODO： Daixb202607141619 新增多尺度注意力MSGA
+        elif m is AIFI or m is MSGA:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
             c1, cm, c2 = ch[f], args[0], args[1]
