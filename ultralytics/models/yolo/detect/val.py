@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import pdb
 from pathlib import Path
 from typing import Any
 
@@ -15,17 +14,19 @@ from ultralytics.data import build_dataloader, build_yolo_dataset, converter
 from ultralytics.engine.validator import BaseValidator
 from ultralytics.utils import LOGGER, RANK, nms, ops
 from ultralytics.utils.checks import check_requirements
-from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou, bbox_ioa2
+from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, bbox_ioa2, box_iou
 from ultralytics.utils.plotting import plot_images
 
+
 def get_size_key(area: float) -> str:
-    """根据面积返回尺寸组键。"""
+    """根据面积返回尺寸组键。."""
     if area < 32**2:
-        return 'small'
+        return "small"
     elif area < 96**2:
-        return 'medium'
+        return "medium"
     else:
-        return 'large'
+        return "large"
+
 
 class DetectionValidator(BaseValidator):
     """A class extending the BaseValidator class for validation based on a detection model.
@@ -93,7 +94,7 @@ class DetectionValidator(BaseValidator):
         self.is_coco = (
             isinstance(val, str)
             and "coco" in val
-            and (val.endswith(f"{os.sep}val2017.txt") or val.endswith(f"{os.sep}test-dev2017.txt"))
+            and (val.endswith((f"{os.sep}val2017.txt", f"{os.sep}test-dev2017.txt")))
         )  # is COCO
         self.is_lvis = isinstance(val, str) and "lvis" in val and not self.is_coco  # is LVIS
         self.class_map = converter.coco80_to_coco91_class() if self.is_coco else list(range(1, len(model.names) + 1))
@@ -162,12 +163,16 @@ class DetectionValidator(BaseValidator):
     #         "im_file": batch["im_file"][si],
     #     }
 
-    def _prepare_batch(self, si: int, batch: dict[str, Any]) -> dict[str, Any]:         # TODO: Daixb202607090756----- 新增：提取忽略区域 -----
+    def _prepare_batch(
+        self, si: int, batch: dict[str, Any]
+    ) -> dict[str, Any]:  # TODO: Daixb202607090756----- 新增：提取忽略区域 -----
         # ... 原有代码保持不变 ...
         """Prepare a batch of images and annotations for validation.
+
         Args:
             si (int): Sample index within the batch.
             batch (dict[str, Any]): Batch data containing images and annotations.
+
         Returns:
             (dict[str, Any]): Prepared batch with processed annotations.
         """
@@ -184,8 +189,14 @@ class DetectionValidator(BaseValidator):
         # TODO: Daixb202607090756----- 新增：提取忽略区域 -----
         if "ignore_batch_idx" in batch and len(batch["ignore_batch_idx"]) > 0:
             ignore_idx = batch["ignore_batch_idx"] == si  # 第 si 个样本的忽略框
-            ignore_bbox = batch["ignore_bboxes"][ignore_idx] if "ignore_bboxes" in batch else torch.empty(0, 4, device=self.device)
-            ignore_cls = batch["ignore_cls"][ignore_idx] if "ignore_cls" in batch else torch.empty(0, device=self.device)
+            ignore_bbox = (
+                batch["ignore_bboxes"][ignore_idx]
+                if "ignore_bboxes" in batch
+                else torch.empty(0, 4, device=self.device)
+            )
+            ignore_cls = (
+                batch["ignore_cls"][ignore_idx] if "ignore_cls" in batch else torch.empty(0, device=self.device)
+            )
             # 坐标转换：如果忽略框是归一化 xywh，需要转为 xyxy 并缩放到 imgsz
             if ignore_bbox.shape[0]:
                 ignore_bbox = ops.xywh2xyxy(ignore_bbox) * torch.tensor(imgsz, device=self.device)[[1, 0, 1, 0]]
@@ -326,7 +337,9 @@ class DetectionValidator(BaseValidator):
     #                 self.save_dir / "labels" / f"{Path(pbatch['im_file']).stem}.txt",
     #             )
 
-    def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:       # TODO: Daixb202607091013-----获取正常类别（排除 -1）；增加尺寸分组收集
+    def update_metrics(
+        self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]
+    ) -> None:  # TODO: Daixb202607091013-----获取正常类别（排除 -1）；增加尺寸分组收集
         """Update metrics with new predictions and ground truth (including size grouping)."""
         for si, pred in enumerate(preds):
             self.seen += 1
@@ -344,14 +357,16 @@ class DetectionValidator(BaseValidator):
             matched_gt_idx = processed.get("matched_gt_idx", None)
 
             no_pred = len(pred_cls) == 0
-            self.metrics.update_stats({
-                "tp": tp,
-                "target_cls": cls,
-                "target_img": np.unique(cls[cls >= 0]) if cls.size > 0 else np.array([], dtype=np.int64),
-                "conf": conf,
-                "pred_cls": pred_cls,
-                "im_name": Path(pbatch["im_file"]).name,
-            })
+            self.metrics.update_stats(
+                {
+                    "tp": tp,
+                    "target_cls": cls,
+                    "target_img": np.unique(cls[cls >= 0]) if cls.size > 0 else np.array([], dtype=np.int64),
+                    "conf": conf,
+                    "pred_cls": pred_cls,
+                    "im_name": Path(pbatch["im_file"]).name,
+                }
+            )
 
             # ----- 尺寸分组统计（新增）-----
             # 获取 GT 框和类别（已缩放到 imgsz 像素坐标）
@@ -362,23 +377,25 @@ class DetectionValidator(BaseValidator):
                 # 分配 GT 尺寸组
                 gt_size_keys = []
                 for area in gt_areas:
-                    if area < 32 ** 2:
-                        gt_size_keys.append('small')
-                    elif area < 96 ** 2:
-                        gt_size_keys.append('medium')
+                    if area < 32**2:
+                        gt_size_keys.append("small")
+                    elif area < 96**2:
+                        gt_size_keys.append("medium")
                     else:
-                        gt_size_keys.append('large')
+                        gt_size_keys.append("large")
             else:
                 gt_size_keys = []
 
             # 初始化临时统计容器
             size_keys = list(self.metrics.size_groups.keys())
-            temp_stats = {k: {'tp': [], 'conf': [], 'pred_cls': [], 'target_cls': [], 'target_img': []} for k in size_keys}
+            temp_stats = {
+                k: {"tp": [], "conf": [], "pred_cls": [], "target_cls": [], "target_img": []} for k in size_keys
+            }
 
             # 添加 GT 到对应尺寸组
             for i, (c, sk) in enumerate(zip(gt_cls, gt_size_keys)):
-                temp_stats[sk]['target_cls'].append(c)
-                temp_stats[sk]['target_img'].append(si)  # 图像索引
+                temp_stats[sk]["target_cls"].append(c)
+                temp_stats[sk]["target_img"].append(si)  # 图像索引
 
             # 处理预测框
             if not no_pred:
@@ -397,37 +414,40 @@ class DetectionValidator(BaseValidator):
                         sk = gt_size_keys[gt_idx]  # 匹配到 GT，使用 GT 尺寸
                     else:
                         # 未匹配，使用预测框面积
-                        if pred_area < 32 ** 2:
-                            sk = 'small'
-                        elif pred_area < 96 ** 2:
-                            sk = 'medium'
+                        if pred_area < 32**2:
+                            sk = "small"
+                        elif pred_area < 96**2:
+                            sk = "medium"
                         else:
-                            sk = 'large'
+                            sk = "large"
                     # 将该预测添加到对应尺寸组
-                    temp_stats[sk]['tp'].append(tp[i])  # tp[i] 是 (10,) 数组
-                    temp_stats[sk]['conf'].append(conf[i])
-                    temp_stats[sk]['pred_cls'].append(pred_cls[i])
+                    temp_stats[sk]["tp"].append(tp[i])  # tp[i] 是 (10,) 数组
+                    temp_stats[sk]["conf"].append(conf[i])
+                    temp_stats[sk]["pred_cls"].append(pred_cls[i])
 
             # 将临时统计转换为 numpy 数组并更新到 metrics
             for sk in size_keys:
                 stat = temp_stats[sk]
                 # 只有当该组有预测或 GT 时才更新
-                if not stat['tp'] and not stat['target_cls']:
+                if not stat["tp"] and not stat["target_cls"]:
                     continue
                 # 转为 numpy
-                tp_arr = np.stack(stat['tp'], axis=0) if stat['tp'] else np.empty((0, self.niou), dtype=bool)
-                conf_arr = np.array(stat['conf']) if stat['conf'] else np.empty(0)
-                pred_cls_arr = np.array(stat['pred_cls']) if stat['pred_cls'] else np.empty(0)
-                target_cls_arr = np.array(stat['target_cls']) if stat['target_cls'] else np.empty(0)
-                target_img_arr = np.array(stat['target_img']) if stat['target_img'] else np.empty(0)
+                tp_arr = np.stack(stat["tp"], axis=0) if stat["tp"] else np.empty((0, self.niou), dtype=bool)
+                conf_arr = np.array(stat["conf"]) if stat["conf"] else np.empty(0)
+                pred_cls_arr = np.array(stat["pred_cls"]) if stat["pred_cls"] else np.empty(0)
+                target_cls_arr = np.array(stat["target_cls"]) if stat["target_cls"] else np.empty(0)
+                target_img_arr = np.array(stat["target_img"]) if stat["target_img"] else np.empty(0)
 
-                self.metrics.update_stats_by_size(sk, {
-                    'tp': tp_arr,
-                    'conf': conf_arr,
-                    'pred_cls': pred_cls_arr,
-                    'target_cls': target_cls_arr,
-                    'target_img': target_img_arr,
-                })
+                self.metrics.update_stats_by_size(
+                    sk,
+                    {
+                        "tp": tp_arr,
+                        "conf": conf_arr,
+                        "pred_cls": pred_cls_arr,
+                        "target_cls": target_cls_arr,
+                        "target_img": target_img_arr,
+                    },
+                )
 
             # ----- 后续原有逻辑（绘图、保存等）-----
             if self.args.plots:
@@ -483,7 +503,7 @@ class DetectionValidator(BaseValidator):
         if RANK == 0:
             gathered_stats = [None] * dist.get_world_size()
             dist.gather_object(self.metrics.stats, gathered_stats, dst=0)
-            merged_stats = {key: [] for key in self.metrics.stats.keys()}
+            merged_stats = {key: [] for key in self.metrics.stats}
             for stats_dict in gathered_stats:
                 for key in merged_stats:
                     merged_stats[key].extend(stats_dict[key])
@@ -515,9 +535,12 @@ class DetectionValidator(BaseValidator):
     #     self.metrics.process(save_dir=self.save_dir, plot=self.args.plots, on_plot=self.on_plot)
     #     self.metrics.clear_stats()
     #     return self.metrics.results_dict
-    def get_stats(self) -> dict[str, Any]: #TODO: Daixb202607100841 新增：将验证集图像总数传递给 metrics，用于 计算LAMR
-        """Calculate and return metrics statistics.        Returns:            (dict[str, Any]): Dictionary containing metrics results.        """
-        self.metrics.n_images = self.seen  #TODO: Daixb202607100841 新增：将验证集图像总数传递给 metrics，用于 计算LAMR
+    def get_stats(
+        self,
+    ) -> dict[str, Any]:  # TODO: Daixb202607100841 新增：将验证集图像总数传递给 metrics，用于 计算LAMR
+        """Calculate and return metrics statistics. Returns: (dict[str, Any]): Dictionary containing metrics results.
+        """
+        self.metrics.n_images = self.seen  # TODO: Daixb202607100841 新增：将验证集图像总数传递给 metrics，用于 计算LAMR
         self.metrics.process(save_dir=self.save_dir, plot=self.args.plots, on_plot=self.on_plot)
         self.metrics.clear_stats()
         results = self.metrics.results_dict
@@ -561,7 +584,7 @@ class DetectionValidator(BaseValidator):
     #                 )
     #             )
 
-    def print_results(self) -> None:  #TODO: Daixb20260712 改进print_results方法：增加打印MR和LAMR
+    def print_results(self) -> None:  # TODO: Daixb20260712 改进print_results方法：增加打印MR和LAMR
         """Print training/validation set metrics per class."""
         pf = "%22s" + "%11i" * 2 + "%11.3g" * len(self.metrics.keys)  # print format
         LOGGER.info(pf % ("all", self.seen, self.metrics.nt_per_class.sum(), *self.metrics.mean_results()))
@@ -571,12 +594,20 @@ class DetectionValidator(BaseValidator):
         # Print results per class
         if self.args.verbose and not self.training and self.nc > 1:
             for i, c in enumerate(self.metrics.ap_class_index):
-                LOGGER.info(pf% (self.names[c], self.metrics.nt_per_image[c], self.metrics.nt_per_class[c], *self.metrics.class_result(i),   )  )
-        #TODO: Daixb20260712 ---------- 新增：打印 MR 和 LAMR ----------
-        if hasattr(self.metrics.box, 'mr_conf50') and hasattr(self.metrics.box, 'lamr') and self.metrics.box.lamr:
+                LOGGER.info(
+                    pf
+                    % (
+                        self.names[c],
+                        self.metrics.nt_per_image[c],
+                        self.metrics.nt_per_class[c],
+                        *self.metrics.class_result(i),
+                    )
+                )
+        # TODO: Daixb20260712 ---------- 新增：打印 MR 和 LAMR ----------
+        if hasattr(self.metrics.box, "mr_conf50") and hasattr(self.metrics.box, "lamr") and self.metrics.box.lamr:
             avg_lamr = sum(self.metrics.box.lamr.values()) / len(self.metrics.box.lamr)
             LOGGER.info(f"MR (IoU=0.5, conf>=0.5): {self.metrics.box.mr_conf50:.4f}\t \t Average LAMR: {avg_lamr:.4f}")
-        #TODO: Daixb20260712 -----------------------------------------
+        # TODO: Daixb20260712 -----------------------------------------
 
     # def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:       # TODO: 原有方法：不考虑忽略区域
     #     """Return correct prediction matrix.
@@ -658,21 +689,24 @@ class DetectionValidator(BaseValidator):
     #
     #     return {"tp": tp, "conf": conf, "pred_cls": pred_cls}
 
-    def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:      # TODO: Daixb202607121556 完善方法：考虑忽略区域和大中小尺度
-        """
-        Return correct prediction matrix and matched ground truth indices for each prediction.
+    def _process_batch(
+        self, preds: dict[str, torch.Tensor], batch: dict[str, Any]
+    ) -> dict[str, np.ndarray]:  # TODO: Daixb202607121556 完善方法：考虑忽略区域和大中小尺度
+        """Return correct prediction matrix and matched ground truth indices for each prediction.
+
         Returns:
-            dict: contains 'tp' (N,10), 'conf' (N,), 'pred_cls' (N,), 'matched_gt_idx' (N,) array of GT indices (-1 if none).
+            dict: contains 'tp' (N,10), 'conf' (N,), 'pred_cls' (N,), 'matched_gt_idx' (N,) array of GT indices (-1 if
+                none).
         """
-        if preds["cls"].shape[0] == 0:     # 无预测 则返回
+        if preds["cls"].shape[0] == 0:  # 无预测 则返回
             return {
                 "tp": np.zeros((0, self.niou), dtype=bool),
                 "conf": np.zeros(0),
                 "pred_cls": np.zeros(0),
-                "matched_gt_idx": np.full((0,), -1, dtype=np.int64)
+                "matched_gt_idx": np.full((0,), -1, dtype=np.int64),
             }
 
-        if batch["cls"].shape[0] == 0:    # 有预测但无 GT
+        if batch["cls"].shape[0] == 0:  # 有预测但无 GT
             tp = np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)
             conf = preds["conf"].cpu().numpy()
             pred_cls = preds["cls"].cpu().numpy()
@@ -701,7 +735,9 @@ class DetectionValidator(BaseValidator):
         max_iou, matched_idx = iou.max(dim=0)  # (num_pred,)
         gt_cls_matched = batch["cls"][matched_idx]  # (num_pred,)
         valid_match = (max_iou >= iou_thres) & (preds["cls"] == gt_cls_matched)
-        matched_gt_idx = torch.where(valid_match, matched_idx, torch.tensor(-1, device=matched_idx.device, dtype=matched_idx.dtype))
+        matched_gt_idx = torch.where(
+            valid_match, matched_idx, torch.tensor(-1, device=matched_idx.device, dtype=matched_idx.dtype)
+        )
 
         # 使用 Ultralytics 原有方法计算 tp (保持一致性)
         tp = self.match_predictions(preds["cls"], batch["cls"], iou).cpu().numpy()
@@ -723,12 +759,7 @@ class DetectionValidator(BaseValidator):
                 pred_cls = pred_cls[keep_mask]
                 matched_gt_idx_np = matched_gt_idx_np[keep_mask]
 
-        return {
-            "tp": tp,
-            "conf": conf,
-            "pred_cls": pred_cls,
-            "matched_gt_idx": matched_gt_idx_np
-        }
+        return {"tp": tp, "conf": conf, "pred_cls": pred_cls, "matched_gt_idx": matched_gt_idx_np}
 
     def build_dataset(self, img_path: str, mode: str = "val", batch: int | None = None) -> torch.utils.data.Dataset:
         """Build YOLO Dataset.
