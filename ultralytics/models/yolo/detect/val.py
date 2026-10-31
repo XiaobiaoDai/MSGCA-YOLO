@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pdb
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +15,17 @@ from ultralytics.data import build_dataloader, build_yolo_dataset, converter
 from ultralytics.engine.validator import BaseValidator
 from ultralytics.utils import LOGGER, RANK, nms, ops
 from ultralytics.utils.checks import check_requirements
-from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou
+from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou, bbox_ioa2
 from ultralytics.utils.plotting import plot_images
 
+def get_size_key(area: float) -> str:
+    """根据面积返回尺寸组键。"""
+    if area < 32**2:
+        return 'small'
+    elif area < 96**2:
+        return 'medium'
+    else:
+        return 'large'
 
 class DetectionValidator(BaseValidator):
     """A class extending the BaseValidator class for validation based on a detection model.
@@ -126,16 +135,43 @@ class DetectionValidator(BaseValidator):
         )
         return [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "extra": x[:, 6:]} for x in outputs]
 
-    def _prepare_batch(self, si: int, batch: dict[str, Any]) -> dict[str, Any]:
-        """Prepare a batch of images and annotations for validation.
+    # def _prepare_batch(self, si: int, batch: dict[str, Any]) -> dict[str, Any]:      # TODO: 原有方法：不考虑忽略区域
+    #     """Prepare a batch of images and annotations for validation.
+    #
+    #     Args:
+    #         si (int): Sample index within the batch.
+    #         batch (dict[str, Any]): Batch data containing images and annotations.
+    #
+    #     Returns:
+    #         (dict[str, Any]): Prepared batch with processed annotations.
+    #     """
+    #     idx = batch["batch_idx"] == si
+    #     cls = batch["cls"][idx].squeeze(-1)
+    #     bbox = batch["bboxes"][idx]
+    #     ori_shape = batch["ori_shape"][si]
+    #     imgsz = batch["img"].shape[2:]
+    #     ratio_pad = batch["ratio_pad"][si]
+    #     if cls.shape[0]:
+    #         bbox = ops.xywh2xyxy(bbox) * torch.tensor(imgsz, device=self.device)[[1, 0, 1, 0]]  # target boxes
+    #     return {
+    #         "cls": cls,
+    #         "bboxes": bbox,
+    #         "ori_shape": ori_shape,
+    #         "imgsz": imgsz,
+    #         "ratio_pad": ratio_pad,
+    #         "im_file": batch["im_file"][si],
+    #     }
 
+    def _prepare_batch(self, si: int, batch: dict[str, Any]) -> dict[str, Any]:         # TODO: Daixb202607090756----- 新增：提取忽略区域 -----
+        # ... 原有代码保持不变 ...
+        """Prepare a batch of images and annotations for validation.
         Args:
             si (int): Sample index within the batch.
             batch (dict[str, Any]): Batch data containing images and annotations.
-
         Returns:
             (dict[str, Any]): Prepared batch with processed annotations.
         """
+        # print(f"DEBUG _prepare_batch: batch keys = {batch.keys()}")      # TODO: Daixb202607091340 _prepare_batch 开头打印：OK
         idx = batch["batch_idx"] == si
         cls = batch["cls"][idx].squeeze(-1)
         bbox = batch["bboxes"][idx]
@@ -144,6 +180,19 @@ class DetectionValidator(BaseValidator):
         ratio_pad = batch["ratio_pad"][si]
         if cls.shape[0]:
             bbox = ops.xywh2xyxy(bbox) * torch.tensor(imgsz, device=self.device)[[1, 0, 1, 0]]  # target boxes
+
+        # TODO: Daixb202607090756----- 新增：提取忽略区域 -----
+        if "ignore_batch_idx" in batch and len(batch["ignore_batch_idx"]) > 0:
+            ignore_idx = batch["ignore_batch_idx"] == si  # 第 si 个样本的忽略框
+            ignore_bbox = batch["ignore_bboxes"][ignore_idx] if "ignore_bboxes" in batch else torch.empty(0, 4, device=self.device)
+            ignore_cls = batch["ignore_cls"][ignore_idx] if "ignore_cls" in batch else torch.empty(0, device=self.device)
+            # 坐标转换：如果忽略框是归一化 xywh，需要转为 xyxy 并缩放到 imgsz
+            if ignore_bbox.shape[0]:
+                ignore_bbox = ops.xywh2xyxy(ignore_bbox) * torch.tensor(imgsz, device=self.device)[[1, 0, 1, 0]]
+        else:
+            ignore_bbox = torch.empty(0, 4, device=self.device)
+            ignore_cls = torch.empty(0, device=self.device)
+        # ------------------------------------
         return {
             "cls": cls,
             "bboxes": bbox,
@@ -151,6 +200,8 @@ class DetectionValidator(BaseValidator):
             "imgsz": imgsz,
             "ratio_pad": ratio_pad,
             "im_file": batch["im_file"][si],
+            "ignore_bboxes": ignore_bbox,
+            "ignore_cls": ignore_cls,
         }
 
     def _prepare_pred(self, pred: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -166,13 +217,117 @@ class DetectionValidator(BaseValidator):
             pred["cls"] *= 0
         return pred
 
-    def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:
-        """Update metrics with new predictions and ground truth.
+    # def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:       # TODO: 原有方法：不考虑忽略区域
+    #     """Update metrics with new predictions and ground truth.
+    #
+    #     Args:
+    #         preds (list[dict[str, torch.Tensor]]): List of predictions from the model.
+    #         batch (dict[str, Any]): Batch data containing ground truth.
+    #     """
+    #     for si, pred in enumerate(preds):
+    #         self.seen += 1
+    #         pbatch = self._prepare_batch(si, batch)
+    #         predn = self._prepare_pred(pred)
+    #
+    #         cls = pbatch["cls"].cpu().numpy()
+    #         no_pred = predn["cls"].shape[0] == 0
+    #         self.metrics.update_stats(
+    #             {
+    #                 **self._process_batch(predn, pbatch),
+    #                 "target_cls": cls,
+    #                 "target_img": np.unique(cls),
+    #                 "conf": np.zeros(0) if no_pred else predn["conf"].cpu().numpy(),
+    #                 "pred_cls": np.zeros(0) if no_pred else predn["cls"].cpu().numpy(),
+    #                 "im_name": Path(pbatch["im_file"]).name,
+    #             }
+    #         )
+    #         # Evaluate
+    #         if self.args.plots:
+    #             self.confusion_matrix.process_batch(predn, pbatch, conf=self.args.conf)
+    #             if self.args.visualize:
+    #                 self.confusion_matrix.plot_matches(
+    #                     batch["img"][si],
+    #                     pbatch["im_file"],
+    #                     self.save_dir,
+    #                     self.args.show_labels,
+    #                     self.args.show_conf,
+    #                 )
+    #
+    #         if no_pred:
+    #             continue
+    #
+    #         # Save
+    #         if self.args.save_json or self.args.save_txt:
+    #             predn_scaled = self.scale_preds(predn, pbatch)
+    #         if self.args.save_json:
+    #             self.pred_to_json(predn_scaled, pbatch)
+    #         if self.args.save_txt:
+    #             self.save_one_txt(
+    #                 predn_scaled,
+    #                 self.args.save_conf,
+    #                 pbatch["ori_shape"],
+    #                 self.save_dir / "labels" / f"{Path(pbatch['im_file']).stem}.txt",
+    #             )
+    # def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:      # TODO: Daixb202607091013-----获取正常类别（排除 -1） -----
+    #     """Update metrics with new predictions and ground truth.
+    #     Args:
+    #         preds (list[dict[str, torch.Tensor]]): List of predictions from the model.
+    #         batch (dict[str, Any]): Batch data containing ground truth.
+    #     """
+    #     for si, pred in enumerate(preds):
+    #         self.seen += 1
+    #         pbatch = self._prepare_batch(si, batch)
+    #         predn = self._prepare_pred(pred)
+    #
+    #         cls = pbatch["cls"].cpu().numpy()
+    #         no_pred = predn["cls"].shape[0] == 0
+    #
+    #         # TODO: Daixb202607091013-----获取正常类别（排除 -1） -----
+    #         processed = self._process_batch(predn, pbatch)            # 获取处理结果
+    #         tp = processed["tp"]
+    #         conf = processed["conf"]
+    #         pred_cls = processed["pred_cls"]
+    #
+    #         no_pred = len(pred_cls) == 0            # 判断是否有剩余预测
+    #
+    #         self.metrics.update_stats({
+    #                                                 "tp": tp,
+    #                                                 "target_cls": cls,
+    #                                                 "target_img": np.unique(cls[cls >= 0]) if cls.size > 0 else np.array([], dtype=np.int64),
+    #                                                 "conf": conf,
+    #                                                 "pred_cls": pred_cls,
+    #                                                 "im_name": Path(pbatch["im_file"]).name,
+    #                                             } )            # 更新统计
+    #         # TODO: Daixb202607091013-----获取正常类别（排除 -1） -----
+    #
+    #         if self.args.plots:            # Evaluate
+    #             self.confusion_matrix.process_batch(predn, pbatch, conf=self.args.conf)
+    #             if self.args.visualize:
+    #                 self.confusion_matrix.plot_matches(
+    #                     batch["img"][si],
+    #                     pbatch["im_file"],
+    #                     self.save_dir,
+    #                     self.args.show_labels,
+    #                     self.args.show_conf,
+    #                 )
+    #
+    #         if no_pred:
+    #             continue
+    #
+    #         if self.args.save_json or self.args.save_txt:            # Save
+    #             predn_scaled = self.scale_preds(predn, pbatch)
+    #         if self.args.save_json:
+    #             self.pred_to_json(predn_scaled, pbatch)
+    #         if self.args.save_txt:
+    #             self.save_one_txt(
+    #                 predn_scaled,
+    #                 self.args.save_conf,
+    #                 pbatch["ori_shape"],
+    #                 self.save_dir / "labels" / f"{Path(pbatch['im_file']).stem}.txt",
+    #             )
 
-        Args:
-            preds (list[dict[str, torch.Tensor]]): List of predictions from the model.
-            batch (dict[str, Any]): Batch data containing ground truth.
-        """
+    def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:       # TODO: Daixb202607091013-----获取正常类别（排除 -1）；增加尺寸分组收集
+        """Update metrics with new predictions and ground truth (including size grouping)."""
         for si, pred in enumerate(preds):
             self.seen += 1
             pbatch = self._prepare_batch(si, batch)
@@ -180,17 +335,101 @@ class DetectionValidator(BaseValidator):
 
             cls = pbatch["cls"].cpu().numpy()
             no_pred = predn["cls"].shape[0] == 0
-            self.metrics.update_stats(
-                {
-                    **self._process_batch(predn, pbatch),
-                    "target_cls": cls,
-                    "target_img": np.unique(cls),
-                    "conf": np.zeros(0) if no_pred else predn["conf"].cpu().numpy(),
-                    "pred_cls": np.zeros(0) if no_pred else predn["cls"].cpu().numpy(),
-                    "im_name": Path(pbatch["im_file"]).name,
-                }
-            )
-            # Evaluate
+
+            # ----- 全局统计（原有）-----
+            processed = self._process_batch(predn, pbatch)
+            tp = processed["tp"]
+            conf = processed["conf"]
+            pred_cls = processed["pred_cls"]
+            matched_gt_idx = processed.get("matched_gt_idx", None)
+
+            no_pred = len(pred_cls) == 0
+            self.metrics.update_stats({
+                "tp": tp,
+                "target_cls": cls,
+                "target_img": np.unique(cls[cls >= 0]) if cls.size > 0 else np.array([], dtype=np.int64),
+                "conf": conf,
+                "pred_cls": pred_cls,
+                "im_name": Path(pbatch["im_file"]).name,
+            })
+
+            # ----- 尺寸分组统计（新增）-----
+            # 获取 GT 框和类别（已缩放到 imgsz 像素坐标）
+            gt_bboxes = pbatch["bboxes"].cpu().numpy()  # (num_gt, 4) xyxy
+            gt_cls = pbatch["cls"].cpu().numpy()  # (num_gt,)
+            if gt_bboxes.shape[0] > 0:
+                gt_areas = (gt_bboxes[:, 2] - gt_bboxes[:, 0]) * (gt_bboxes[:, 3] - gt_bboxes[:, 1])
+                # 分配 GT 尺寸组
+                gt_size_keys = []
+                for area in gt_areas:
+                    if area < 32 ** 2:
+                        gt_size_keys.append('small')
+                    elif area < 96 ** 2:
+                        gt_size_keys.append('medium')
+                    else:
+                        gt_size_keys.append('large')
+            else:
+                gt_size_keys = []
+
+            # 初始化临时统计容器
+            size_keys = list(self.metrics.size_groups.keys())
+            temp_stats = {k: {'tp': [], 'conf': [], 'pred_cls': [], 'target_cls': [], 'target_img': []} for k in size_keys}
+
+            # 添加 GT 到对应尺寸组
+            for i, (c, sk) in enumerate(zip(gt_cls, gt_size_keys)):
+                temp_stats[sk]['target_cls'].append(c)
+                temp_stats[sk]['target_img'].append(si)  # 图像索引
+
+            # 处理预测框
+            if not no_pred:
+                # 预测框坐标（像素）
+                pred_bboxes = predn["bboxes"].cpu().numpy()  # (num_pred, 4)
+                pred_areas = (pred_bboxes[:, 2] - pred_bboxes[:, 0]) * (pred_bboxes[:, 3] - pred_bboxes[:, 1])
+
+                # 确定每个预测的尺寸组
+                if matched_gt_idx is not None:
+                    matched_gt_idx_np = matched_gt_idx
+                else:
+                    matched_gt_idx_np = np.full(len(pred_bboxes), -1)
+
+                for i, (pred_area, gt_idx) in enumerate(zip(pred_areas, matched_gt_idx_np)):
+                    if gt_idx >= 0 and gt_idx < len(gt_size_keys):
+                        sk = gt_size_keys[gt_idx]  # 匹配到 GT，使用 GT 尺寸
+                    else:
+                        # 未匹配，使用预测框面积
+                        if pred_area < 32 ** 2:
+                            sk = 'small'
+                        elif pred_area < 96 ** 2:
+                            sk = 'medium'
+                        else:
+                            sk = 'large'
+                    # 将该预测添加到对应尺寸组
+                    temp_stats[sk]['tp'].append(tp[i])  # tp[i] 是 (10,) 数组
+                    temp_stats[sk]['conf'].append(conf[i])
+                    temp_stats[sk]['pred_cls'].append(pred_cls[i])
+
+            # 将临时统计转换为 numpy 数组并更新到 metrics
+            for sk in size_keys:
+                stat = temp_stats[sk]
+                # 只有当该组有预测或 GT 时才更新
+                if not stat['tp'] and not stat['target_cls']:
+                    continue
+                # 转为 numpy
+                tp_arr = np.stack(stat['tp'], axis=0) if stat['tp'] else np.empty((0, self.niou), dtype=bool)
+                conf_arr = np.array(stat['conf']) if stat['conf'] else np.empty(0)
+                pred_cls_arr = np.array(stat['pred_cls']) if stat['pred_cls'] else np.empty(0)
+                target_cls_arr = np.array(stat['target_cls']) if stat['target_cls'] else np.empty(0)
+                target_img_arr = np.array(stat['target_img']) if stat['target_img'] else np.empty(0)
+
+                self.metrics.update_stats_by_size(sk, {
+                    'tp': tp_arr,
+                    'conf': conf_arr,
+                    'pred_cls': pred_cls_arr,
+                    'target_cls': target_cls_arr,
+                    'target_img': target_img_arr,
+                })
+
+            # ----- 后续原有逻辑（绘图、保存等）-----
             if self.args.plots:
                 self.confusion_matrix.process_batch(predn, pbatch, conf=self.args.conf)
                 if self.args.visualize:
@@ -205,7 +444,6 @@ class DetectionValidator(BaseValidator):
             if no_pred:
                 continue
 
-            # Save
             if self.args.save_json or self.args.save_txt:
                 predn_scaled = self.scale_preds(predn, pbatch)
             if self.args.save_json:
@@ -269,17 +507,61 @@ class DetectionValidator(BaseValidator):
             if RANK == 0:
                 self.confusion_matrix.matrix = matrix.cpu().numpy()
 
-    def get_stats(self) -> dict[str, Any]:
-        """Calculate and return metrics statistics.
-
-        Returns:
-            (dict[str, Any]): Dictionary containing metrics results.
-        """
+    # def get_stats(self) -> dict[str, Any]:      # TODO: 原有方法：不计算LAMR
+    #     """Calculate and return metrics statistics.
+    #     Returns:
+    #         (dict[str, Any]): Dictionary containing metrics results.
+    #     """
+    #     self.metrics.process(save_dir=self.save_dir, plot=self.args.plots, on_plot=self.on_plot)
+    #     self.metrics.clear_stats()
+    #     return self.metrics.results_dict
+    def get_stats(self) -> dict[str, Any]: #TODO: Daixb202607100841 新增：将验证集图像总数传递给 metrics，用于 计算LAMR
+        """Calculate and return metrics statistics.        Returns:            (dict[str, Any]): Dictionary containing metrics results.        """
+        self.metrics.n_images = self.seen  #TODO: Daixb202607100841 新增：将验证集图像总数传递给 metrics，用于 计算LAMR
         self.metrics.process(save_dir=self.save_dir, plot=self.args.plots, on_plot=self.on_plot)
         self.metrics.clear_stats()
-        return self.metrics.results_dict
+        results = self.metrics.results_dict
+        # results={'metrics/precision(B)': np.float64(0.0), 'metrics/recall(B)': np.float64(0.0), 'metrics/mAP50(B)': np.float64(0.0), 'metrics/mAP50-95(B)': np.float64(0.0), 'fitness': 0.0, 'mr_conf50': np.float64(1.0),
+        # 'mAP50_small': np.float64(0.0), 'mAP50-95_small': np.float64(0.0), 'mr_conf50_small': 1.0, 'avg_lamr_small': 0.0,
+        # 'mAP50_medium': np.float64(0.0), 'mAP50-95_medium': np.float64(0.0), 'mr_conf50_medium': 1.0, 'avg_lamr_medium': 0.0,
+        # 'mAP50_large': np.float64(0.0), 'mAP50-95_large': np.float64(0.0), 'mr_conf50_large': np.float64(1.0), 'avg_lamr_large': 1.0,
+        # 'mAP50_Ped_small': np.float64(0.0), 'mAP50-95_Ped_small': np.float64(0.0), 'mr_conf50_Ped_small': 1.0, 'lamr_Ped_small': 1.0,
+        # 'mAP50_Ped_medium': np.float64(0.0), 'mAP50-95_Ped_medium': np.float64(0.0), 'mr_conf50_Ped_medium': 1.0, 'lamr_Ped_medium': 1.0,
+        # 'mAP50_Ped_large': np.float64(0.0), 'mAP50-95_Ped_large': np.float64(0.0), 'mr_conf50_Ped_large': np.float64(1.0), 'lamr_Ped_large': 1.0}
 
-    def print_results(self) -> None:
+        # TODO: Daixb202607112228---------- 新增：提取 MR 和 LAMR 用于训练日志和 CSV ----------
+        # if hasattr(self.metrics.box, 'mr_conf50'):        # MR @ IoU=0.5, conf>=0.5
+        #     self.metrics.results_dict["mr_conf50"] = self.metrics.box.mr_conf50  # 添加 MR @ IoU=0.5, conf=0.5 所有类别的平均值 self.metrics.box.mr_conf50=np.float64(1.0)
+        #     results["mr_conf50_all"] = float(self.metrics.box.mr_conf50)
+
+        # TODO: Daixb202607112228可选：如果你还想看每个类别的 LAMR，可以按需添加，但为避免 csv 列过多，这里只加平均值
+        # if hasattr(self.metrics.box, 'lamr') and self.metrics.box.lamr:        # LAMR (对数平均漏检率)
+        #     lamr_dict = self.metrics.box.lamr
+        #     avg_lamr = sum(lamr_dict.values()) / len(lamr_dict) if lamr_dict else 0.0
+        #     results["avg_lamr"] = float(avg_lamr)
+        return results
+
+    # def print_results(self) -> None: # TODO: 原有方法：不打印MR和LAMR
+    #     """Print training/validation set metrics per class."""
+    #     pf = "%22s" + "%11i" * 2 + "%11.3g" * len(self.metrics.keys)  # print format
+    #     LOGGER.info(pf % ("all", self.seen, self.metrics.nt_per_class.sum(), *self.metrics.mean_results()))
+    #     if self.metrics.nt_per_class.sum() == 0:
+    #         LOGGER.warning(f"no labels found in {self.args.task} set, cannot compute metrics without labels")
+    #
+    #     # Print results per class
+    #     if self.args.verbose and not self.training and self.nc > 1:
+    #         for i, c in enumerate(self.metrics.ap_class_index):
+    #             LOGGER.info(
+    #                 pf
+    #                 % (
+    #                     self.names[c],
+    #                     self.metrics.nt_per_image[c],
+    #                     self.metrics.nt_per_class[c],
+    #                     *self.metrics.class_result(i),
+    #                 )
+    #             )
+
+    def print_results(self) -> None:  #TODO: Daixb20260712 改进print_results方法：增加打印MR和LAMR
         """Print training/validation set metrics per class."""
         pf = "%22s" + "%11i" * 2 + "%11.3g" * len(self.metrics.keys)  # print format
         LOGGER.info(pf % ("all", self.seen, self.metrics.nt_per_class.sum(), *self.metrics.mean_results()))
@@ -289,31 +571,164 @@ class DetectionValidator(BaseValidator):
         # Print results per class
         if self.args.verbose and not self.training and self.nc > 1:
             for i, c in enumerate(self.metrics.ap_class_index):
-                LOGGER.info(
-                    pf
-                    % (
-                        self.names[c],
-                        self.metrics.nt_per_image[c],
-                        self.metrics.nt_per_class[c],
-                        *self.metrics.class_result(i),
-                    )
-                )
+                LOGGER.info(pf% (self.names[c], self.metrics.nt_per_image[c], self.metrics.nt_per_class[c], *self.metrics.class_result(i),   )  )
+        #TODO: Daixb20260712 ---------- 新增：打印 MR 和 LAMR ----------
+        if hasattr(self.metrics.box, 'mr_conf50') and hasattr(self.metrics.box, 'lamr') and self.metrics.box.lamr:
+            avg_lamr = sum(self.metrics.box.lamr.values()) / len(self.metrics.box.lamr)
+            LOGGER.info(f"MR (IoU=0.5, conf>=0.5): {self.metrics.box.mr_conf50:.4f}\t \t Average LAMR: {avg_lamr:.4f}")
+        #TODO: Daixb20260712 -----------------------------------------
 
-    def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:
-        """Return correct prediction matrix.
+    # def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:       # TODO: 原有方法：不考虑忽略区域
+    #     """Return correct prediction matrix.
+    #
+    #     Args:
+    #         preds (dict[str, torch.Tensor]): Dictionary containing prediction data with 'bboxes' and 'cls' keys.
+    #         batch (dict[str, Any]): Batch dictionary containing ground truth data with 'bboxes' and 'cls' keys.
+    #
+    #     Returns:
+    #         (dict[str, np.ndarray]): Dictionary containing 'tp' key with correct prediction matrix of shape (N, 10) for
+    #             10 IoU levels.
+    #     """
+    #     if batch["cls"].shape[0] == 0 or preds["cls"].shape[0] == 0:
+    #         return {"tp": np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)}
+    #     iou = box_iou(batch["bboxes"], preds["bboxes"])
+    #     return {"tp": self.match_predictions(preds["cls"], batch["cls"], iou).cpu().numpy()}
 
-        Args:
-            preds (dict[str, torch.Tensor]): Dictionary containing prediction data with 'bboxes' and 'cls' keys.
-            batch (dict[str, Any]): Batch dictionary containing ground truth data with 'bboxes' and 'cls' keys.
+    # def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:        # TODO: Daixb202607090756
+    #     if batch["cls"].shape[0] == 0 or preds["cls"].shape[0] == 0:
+    #         return {"tp": np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)}
+    #
+    #     iou = box_iou(batch["bboxes"], preds["bboxes"])       # 计算预测框与真实框的 IoU
+    #     tp = self.match_predictions(preds["cls"], batch["cls"], iou).cpu().numpy()
+    #
+    #     # TODO: Daixb202607090756----- 新增：过滤忽略区域 -----
+    #     ignore_bboxes = batch.get("ignore_bboxes", None)
+    #     print(f"DEBUG _process_batch: ignore_bboxes shape = {ignore_bboxes.shape if ignore_bboxes is not None else None}")   # TODO: Daixb202607091342 打印 ignore_bboxes 形状：OK
+    #     if ignore_bboxes is not None and ignore_bboxes.shape[0] > 0:
+    #         # 计算预测框与忽略框的 IoU
+    #         iou_ignore = box_iou(ignore_bboxes, preds["bboxes"])  # shape: (num_ignore, num_pred)
+    #         # 对每个预测框，取与所有忽略框的最大 IoU
+    #         max_iou_ignore, _ = iou_ignore.max(dim=0)  # (num_pred,)
+    #         # 如果最大 IoU > 阈值（例如 0.5），则将该预测框标记为忽略（tp=False）
+    #         ignore_mask = max_iou_ignore > 0.5
+    #         if ignore_mask.any():
+    #             tp[ignore_mask.cpu().numpy()] = False
+    #
+    #         print(ignore_bboxes.shape)
+    #     # ---------------------------------------
+    #     return {"tp": tp}
 
-        Returns:
-            (dict[str, np.ndarray]): Dictionary containing 'tp' key with correct prediction matrix of shape (N, 10) for
-                10 IoU levels.
+    # def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:        # TODO: Daixb202607100752 考虑忽略区域
+    #     if preds["cls"].shape[0] == 0:        # 如果没有预测或没有标注，返回空
+    #         return {"tp": np.zeros((0, self.niou), dtype=bool), "conf": np.zeros(0), "pred_cls": np.zeros(0)}
+    #     if batch["cls"].shape[0] == 0:
+    #         tp = np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)    # 有预测但无标注：全部为 FP，但需考虑忽略框
+    #         conf = preds["conf"].cpu().numpy()
+    #         pred_cls = preds["cls"].cpu().numpy()
+    #         # 仍需过滤与忽略框重叠的预测（即使无标注，它们也应被移除）
+    #         ignore_bboxes = batch.get("ignore_bboxes", None)
+    #         if ignore_bboxes is not None and ignore_bboxes.shape[0] > 0:
+    #             # iou_ignore = box_iou(ignore_bboxes, preds["bboxes"])
+    #             iou_ignore = bbox_ioa2(ignore_bboxes, preds["bboxes"])   # TODO: Daixb202607092313 改成bbox_ioa2
+    #             max_iou_ignore, _ = iou_ignore.max(dim=0)
+    #             ignore_mask = max_iou_ignore > 0.5
+    #             if ignore_mask.any():
+    #                 keep_mask = ~ignore_mask.cpu().numpy()
+    #                 tp = tp[keep_mask]
+    #                 conf = conf[keep_mask]
+    #                 pred_cls = pred_cls[keep_mask]
+    #         return {"tp": tp, "conf": conf, "pred_cls": pred_cls}
+    #
+    #     # 正常情况：有标注且有预测
+    #     iou = box_iou(batch["bboxes"], preds["bboxes"])
+    #     tp = self.match_predictions(preds["cls"], batch["cls"], iou).cpu().numpy()  # (N, 10)
+    #     conf = preds["conf"].cpu().numpy()
+    #     pred_cls = preds["cls"].cpu().numpy()
+    #
+    #     ignore_bboxes = batch.get("ignore_bboxes", None)        # 忽略框过滤
+    #     if ignore_bboxes is not None and ignore_bboxes.shape[0] > 0:
+    #         iou_ignore = box_iou(ignore_bboxes, preds["bboxes"])
+    #         max_iou_ignore, _ = iou_ignore.max(dim=0)
+    #         ignore_mask = max_iou_ignore > 0.5
+    #         if ignore_mask.any():
+    #             keep_mask = ~ignore_mask.cpu().numpy()
+    #             tp = tp[keep_mask]
+    #             conf = conf[keep_mask]
+    #             pred_cls = pred_cls[keep_mask]
+    #
+    #     return {"tp": tp, "conf": conf, "pred_cls": pred_cls}
+
+    def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:      # TODO: Daixb202607121556 完善方法：考虑忽略区域和大中小尺度
         """
-        if batch["cls"].shape[0] == 0 or preds["cls"].shape[0] == 0:
-            return {"tp": np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)}
-        iou = box_iou(batch["bboxes"], preds["bboxes"])
-        return {"tp": self.match_predictions(preds["cls"], batch["cls"], iou).cpu().numpy()}
+        Return correct prediction matrix and matched ground truth indices for each prediction.
+        Returns:
+            dict: contains 'tp' (N,10), 'conf' (N,), 'pred_cls' (N,), 'matched_gt_idx' (N,) array of GT indices (-1 if none).
+        """
+        if preds["cls"].shape[0] == 0:     # 无预测 则返回
+            return {
+                "tp": np.zeros((0, self.niou), dtype=bool),
+                "conf": np.zeros(0),
+                "pred_cls": np.zeros(0),
+                "matched_gt_idx": np.full((0,), -1, dtype=np.int64)
+            }
+
+        if batch["cls"].shape[0] == 0:    # 有预测但无 GT
+            tp = np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)
+            conf = preds["conf"].cpu().numpy()
+            pred_cls = preds["cls"].cpu().numpy()
+            matched_gt_idx = np.full((preds["cls"].shape[0],), -1, dtype=np.int64)
+
+            # 过滤忽略框
+            ignore_bboxes = batch.get("ignore_bboxes", None)
+            if ignore_bboxes is not None and ignore_bboxes.shape[0] > 0:
+                # iou_ignore = box_iou(ignore_bboxes, preds["bboxes"])
+                iou_ignore = bbox_ioa2(ignore_bboxes, preds["bboxes"])
+                max_iou_ignore, _ = iou_ignore.max(dim=0)
+                ignore_mask = max_iou_ignore > 0.5
+                if ignore_mask.any():
+                    keep_mask = ~ignore_mask.cpu().numpy()
+                    tp = tp[keep_mask]
+                    conf = conf[keep_mask]
+                    pred_cls = pred_cls[keep_mask]
+                    matched_gt_idx = matched_gt_idx[keep_mask]
+            return {"tp": tp, "conf": conf, "pred_cls": pred_cls, "matched_gt_idx": matched_gt_idx}
+
+        # 正常情况：有 GT 且有预测
+        iou = box_iou(batch["bboxes"], preds["bboxes"])  # (num_gt, num_pred)
+
+        # 计算每个预测的最佳匹配 GT 索引（使用 IoU=0.5 阈值，类别匹配）
+        iou_thres = 0.5
+        max_iou, matched_idx = iou.max(dim=0)  # (num_pred,)
+        gt_cls_matched = batch["cls"][matched_idx]  # (num_pred,)
+        valid_match = (max_iou >= iou_thres) & (preds["cls"] == gt_cls_matched)
+        matched_gt_idx = torch.where(valid_match, matched_idx, torch.tensor(-1, device=matched_idx.device, dtype=matched_idx.dtype))
+
+        # 使用 Ultralytics 原有方法计算 tp (保持一致性)
+        tp = self.match_predictions(preds["cls"], batch["cls"], iou).cpu().numpy()
+        conf = preds["conf"].cpu().numpy()
+        pred_cls = preds["cls"].cpu().numpy()
+        matched_gt_idx_np = matched_gt_idx.cpu().numpy()
+
+        # 忽略框过滤
+        ignore_bboxes = batch.get("ignore_bboxes", None)
+        if ignore_bboxes is not None and ignore_bboxes.shape[0] > 0:
+            # iou_ignore = box_iou(ignore_bboxes, preds["bboxes"])
+            iou_ignore = bbox_ioa2(ignore_bboxes, preds["bboxes"])
+            max_iou_ignore, _ = iou_ignore.max(dim=0)
+            ignore_mask = max_iou_ignore > 0.5
+            if ignore_mask.any():
+                keep_mask = ~ignore_mask.cpu().numpy()
+                tp = tp[keep_mask]
+                conf = conf[keep_mask]
+                pred_cls = pred_cls[keep_mask]
+                matched_gt_idx_np = matched_gt_idx_np[keep_mask]
+
+        return {
+            "tp": tp,
+            "conf": conf,
+            "pred_cls": pred_cls,
+            "matched_gt_idx": matched_gt_idx_np
+        }
 
     def build_dataset(self, img_path: str, mode: str = "val", batch: int | None = None) -> torch.utils.data.Dataset:
         """Build YOLO Dataset.

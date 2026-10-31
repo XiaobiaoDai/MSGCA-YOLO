@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pdb
 from collections import defaultdict
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
@@ -90,12 +91,79 @@ class YOLODataset(BaseDataset):
         assert not (self.use_segments and self.use_keypoints), "Can not use both segments and keypoints."
         super().__init__(*args, channels=self.data.get("channels", 3), **kwargs)
 
-    def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:
-        """Cache dataset labels, check images and read shapes.
+    # def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:        # TODO: 原有方法：不考虑忽略区域
+    #     """Cache dataset labels, check images and read shapes.
+    #     Args:
+    #         path (Path): Path where to save the cache file.
+    #
+    #     Returns:
+    #         (dict): Dictionary containing cached labels and related information.
+    #     """
+    #     x = {"labels": []}
+    #     nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupt, messages
+    #     desc = f"{self.prefix}Scanning {path.parent / path.stem}..."
+    #     total = len(self.im_files)
+    #     nkpt, ndim = self.data.get("kpt_shape", (0, 0))
+    #     if self.use_keypoints and (nkpt <= 0 or ndim not in {2, 3}):
+    #         raise ValueError(
+    #             "'kpt_shape' in data.yaml missing or incorrect. Should be a list with [number of "
+    #             "keypoints, number of dims (2 for x,y or 3 for x,y,visible)], i.e. 'kpt_shape: [17, 3]'"
+    #         )
+    #     with ThreadPool(NUM_THREADS) as pool:
+    #         results = pool.imap(
+    #             func=verify_image_label,
+    #             iterable=zip(
+    #                 self.im_files,
+    #                 self.label_files,
+    #                 repeat(self.prefix),
+    #                 repeat(self.use_keypoints),
+    #                 repeat(len(self.data["names"])),
+    #                 repeat(nkpt),
+    #                 repeat(ndim),
+    #                 repeat(self.single_cls),
+    #             ),
+    #         )
+    #         pbar = TQDM(results, desc=desc, total=total)
+    #         for im_file, lb, shape, segments, keypoint, nm_f, nf_f, ne_f, nc_f, msg in pbar:
+    #             nm += nm_f
+    #             nf += nf_f
+    #             ne += ne_f
+    #             nc += nc_f
+    #             if im_file:
+    #                 x["labels"].append(
+    #                     {
+    #                         "im_file": im_file,
+    #                         "shape": shape,
+    #                         "cls": lb[:, 0:1],  # n, 1
+    #                         "bboxes": lb[:, 1:],  # n, 4
+    #                         "segments": segments,
+    #                         "keypoints": keypoint,
+    #                         "normalized": True,
+    #                         "bbox_format": "xywh",
+    #                     }
+    #                 )
+    #             if msg:
+    #                 msgs.append(msg)
+    #             pbar.desc = f"{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt"
+    #         pbar.close()
+    #
+    #     if msgs:
+    #         LOGGER.info("\n".join(msgs))
+    #     if nf == 0:
+    #         if self.augment:  # training requires labels; unlabeled val splits (e.g. COCO test-dev) only warn
+    #             raise ValueError(f"{self.prefix}No labels found in {path}. {HELP_URL}")
+    #         LOGGER.warning(f"{self.prefix}No labels found in {path}. {HELP_URL}")
+    #     x["hash"] = get_hash(self.label_files + self.im_files)
+    #     x["results"] = nf, nm, ne, nc, len(self.im_files)
+    #     x["msgs"] = msgs  # warnings
+    #     if x["labels"]:
+    #         save_dataset_cache_file(self.prefix, path, x, DATASET_CACHE_VERSION)
+    #     return x
 
+    def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:          # TODO: Daixb202607090822----- 在循环体内部，构造 label 字典之前，分离忽略框 -----
+        """Cache dataset labels, check images and read shapes.
         Args:
             path (Path): Path where to save the cache file.
-
         Returns:
             (dict): Dictionary containing cached labels and related information.
         """
@@ -129,7 +197,27 @@ class YOLODataset(BaseDataset):
                 nf += nf_f
                 ne += ne_f
                 nc += nc_f
-                if im_file:
+                if im_file:          # TODO: Daixb202607090822----- 在循环体内部，构造 label 字典之前，分离忽略框 -----
+                    if lb is not None and len(lb) > 0:     # 分离忽略框 (cls == -1)
+                        cls_col = lb[:, 0:1]  # (n, 1)
+                        ignore_mask = (cls_col == -1).flatten()
+                        normal_mask = ~ignore_mask
+                        lb_normal = lb[normal_mask]       # 正常标签
+                        segments_normal = [segments[i] for i in range(len(segments)) if normal_mask[i]] if len(segments) > 0 else []
+                        keypoint_normal = keypoint[normal_mask] if keypoint is not None else None
+                        lb_ignore = lb[ignore_mask]         # 忽略标签
+                        # 处理空的情况
+                        cls_normal = lb_normal[:, 0:1] if len(lb_normal) > 0 else np.zeros((0, 1), dtype=np.float32)
+                        bboxes_normal = lb_normal[:, 1:] if len(lb_normal) > 0 else np.zeros((0, 4), dtype=np.float32)
+                        cls_ignore = lb_ignore[:, 0:1] if len(lb_ignore) > 0 else np.zeros((0, 1), dtype=np.float32)
+                        bboxes_ignore = lb_ignore[:, 1:] if len(lb_ignore) > 0 else np.zeros((0, 4), dtype=np.float32)
+                    else:
+                        cls_normal = np.zeros((0, 1), dtype=np.float32)
+                        bboxes_normal = np.zeros((0, 4), dtype=np.float32)
+                        cls_ignore = np.zeros((0, 1), dtype=np.float32)
+                        bboxes_ignore = np.zeros((0, 4), dtype=np.float32)
+                        segments_normal = []
+                        keypoint_normal = None
                     x["labels"].append(
                         {
                             "im_file": im_file,
@@ -140,6 +228,8 @@ class YOLODataset(BaseDataset):
                             "keypoints": keypoint,
                             "normalized": True,
                             "bbox_format": "xywh",
+                            "ignore_cls": cls_ignore,  # 新增
+                            "ignore_bboxes": bboxes_ignore,  # 新增
                         }
                     )
                 if msg:
@@ -287,14 +377,42 @@ class YOLODataset(BaseDataset):
             segments = np.zeros((0, segment_resamples, 2), dtype=np.float32)
         label["instances"] = Instances(bboxes, segments, keypoints, bbox_format=bbox_format, normalized=normalized)
         return label
+    #
+    # @staticmethod
+    # def collate_fn(batch: list[dict]) -> dict:        # TODO: 原有方法：不考虑忽略区域
+    #     """Collate data samples into batches.
+    #
+    #     Args:
+    #         batch (list[dict]): List of dictionaries containing sample data.
+    #
+    #     Returns:
+    #         (dict): Collated batch with stacked tensors.
+    #     """
+    #     new_batch = {}
+    #     batch = [dict(sorted(b.items())) for b in batch]  # make sure the keys are in the same order
+    #     keys = batch[0].keys()
+    #     values = list(zip(*[list(b.values()) for b in batch]))
+    #     for i, k in enumerate(keys):
+    #         value = values[i]
+    #         if k in {"img", "text_feats", "semantic_mask", "sem_masks"}:
+    #             value = torch.stack(value, 0)
+    #         elif k == "visuals":
+    #             value = torch.nn.utils.rnn.pad_sequence(value, batch_first=True)
+    #         if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
+    #             value = torch.cat(value, 0)
+    #         new_batch[k] = value
+    #     if "batch_idx" in new_batch:
+    #         new_batch["batch_idx"] = list(new_batch["batch_idx"])
+    #         for i in range(len(new_batch["batch_idx"])):
+    #             new_batch["batch_idx"][i] += i  # add target image index for build_targets()
+    #         new_batch["batch_idx"] = torch.cat(new_batch["batch_idx"], 0)
+    #     return new_batch
 
     @staticmethod
-    def collate_fn(batch: list[dict]) -> dict:
+    def collate_fn(batch: list[dict]) -> dict:           # TODO: Daixb202607090829----- 新增处理忽略框  -----
         """Collate data samples into batches.
-
         Args:
             batch (list[dict]): List of dictionaries containing sample data.
-
         Returns:
             (dict): Collated batch with stacked tensors.
         """
@@ -302,6 +420,8 @@ class YOLODataset(BaseDataset):
         batch = [dict(sorted(b.items())) for b in batch]  # make sure the keys are in the same order
         keys = batch[0].keys()
         values = list(zip(*[list(b.values()) for b in batch]))
+        ignore_batch_idx_list = []  # 用于收集各样本的忽略框索引
+
         for i, k in enumerate(keys):
             value = values[i]
             if k in {"img", "text_feats", "semantic_mask", "sem_masks"}:
@@ -310,13 +430,57 @@ class YOLODataset(BaseDataset):
                 value = torch.nn.utils.rnn.pad_sequence(value, batch_first=True)
             if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
                 value = torch.cat(value, 0)
+            # TODO: Daixb202607090829----- 新增处理忽略框  -----
+            if k == "ignore_bboxes":
+                # print(f"DEBUG collate: value list lengths: {[v.shape[0] for v in value]}")   # TODO: Daixb202607091337  处理 ignore_bboxes 之前打印：OK
+                for idx, v in enumerate(value): # value is a list of numpy arrays or tensors
+                    if v.shape[0] > 0:
+                        ignore_batch_idx_list.append(torch.full((v.shape[0],), idx, dtype=torch.long))
+                value = [torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value]     # 统一转换为 torch.Tensor
+                # 过滤掉空张量（shape[0] == 0），因为 torch.cat 不允许空张量
+                value = [v for v in value if v.numel() > 0]
+                value = torch.cat(value, 0) if value else torch.empty(0, 4)
+            if k == "ignore_cls":
+                value = [torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value]
+                value = [v for v in value if v.numel() > 0]
+                value = torch.cat(value, 0) if value else torch.empty(0, 1)
+            #TODO:  ----------------------------------
+
             new_batch[k] = value
+
+        # 处理 batch_idx
         if "batch_idx" in new_batch:
             new_batch["batch_idx"] = list(new_batch["batch_idx"])
             for i in range(len(new_batch["batch_idx"])):
-                new_batch["batch_idx"][i] += i  # add target image index for build_targets()
+                new_batch["batch_idx"][i] += i
             new_batch["batch_idx"] = torch.cat(new_batch["batch_idx"], 0)
+
+        # TODO: Daixb202607090829----- 新增：处理 ignore_batch_idx ----------
+        if ignore_batch_idx_list:
+            ignore_batch_idx = torch.cat(ignore_batch_idx_list, 0)
+        else:
+            ignore_batch_idx = torch.empty(0, dtype=torch.long)
+        new_batch["ignore_batch_idx"] = ignore_batch_idx
+        #TODO:  ------------------------------------------------
         return new_batch
+
+    def __getitem__(self, index):    # TODO: Daixb202607091054----- 重写 __getitem__ 以确保 ignore_bboxes 和 ignore_cls 在数据增强后仍然保留。 -----
+        label = self.get_image_and_label(index)        # 获取原始数据（包含 ignore_bboxes, ignore_cls 等）
+        # 保存忽略框（在 transforms 之前）
+        ignore_bboxes = label.get('ignore_bboxes', np.zeros((0, 4), dtype=np.float32))
+        ignore_cls = label.get('ignore_cls', np.zeros((0, 1), dtype=np.float32))
+        # if ignore_bboxes.shape[0] > 0:
+        #     print(f"DEBUG __getitem__: index={index}, ignore_bboxes shape={ignore_bboxes.shape}")   # TODO: Daixb202607091054 在 __getitem__ 中，保存 ignore_bboxes 后立即打印：OK
+
+        # 应用数据增强（包括 Format）
+        if self.transforms:
+            label = self.transforms(label)
+
+        # 重新插入忽略框（确保它们不被丢弃）
+        label['ignore_bboxes'] = ignore_bboxes
+        label['ignore_cls'] = ignore_cls
+
+        return label
 
 
 class YOLOMultiModalDataset(YOLODataset):

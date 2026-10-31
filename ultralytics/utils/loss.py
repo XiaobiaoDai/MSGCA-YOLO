@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import pdb
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
-from .metrics import bbox_iou, probiou
+from .metrics import bbox_iou, probiou, box_ioa1_torch #TODO: Daixb20260711 增加导入 box_ioa1_torch
 from .tal import bbox2dist, rbox2dist
 
 
@@ -336,9 +337,7 @@ class KeypointLoss(nn.Module):
 class v8DetectionLoss:
     """Criterion class for computing training losses for YOLOv8 object detection."""
 
-    def __init__(
-        self, model: torch.nn.Module, tal_topk: int = 10, tal_topk2: int | None = None
-    ):  # model must be de-paralleled
+    def __init__(self, model: torch.nn.Module, tal_topk: int = 10, tal_topk2: int | None = None):  # model must be de-paralleled
         """Initialize v8DetectionLoss with model parameters and task-aligned assignment settings."""
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
@@ -369,6 +368,7 @@ class v8DetectionLoss:
         )
         self.bbox_loss = BboxLoss(m.reg_max).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
+        self.ignore_iou_thres = 0.5  #TODO：Daixb202607111519 可与 NMS 阈值一致
 
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
         """Preprocess targets by converting to tensor format and scaling coordinates."""
@@ -397,7 +397,71 @@ class v8DetectionLoss:
             # pred_dist = (pred_dist.view(b, a, c // 4, 4).softmax(2) * self.proj.type(pred_dist.dtype).view(1, 1, -1, 1)).sum(2)
         return dist2bbox(pred_dist, anchor_points, xywh=False)
 
-    def get_assigned_targets_and_loss(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> tuple:
+    # def get_assigned_targets_and_loss(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> tuple:  #TODO: Daixb20260711 原代码。
+    #     """Calculate the sum of the loss for box, cls and dfl multiplied by batch size and return foreground mask and
+    #     target indices.
+    #     """
+    #     loss = torch.zeros(3, device=self.device)  # box, cls, dfl
+    #     pred_distri, pred_scores = (
+    #         preds["boxes"].permute(0, 2, 1).contiguous(),
+    #         preds["scores"].permute(0, 2, 1).contiguous(),
+    #     )
+    #     anchor_points, stride_tensor = make_anchors(preds["feats"], self.stride, 0.5)
+    #
+    #     dtype = pred_scores.dtype
+    #     batch_size = pred_scores.shape[0]
+    #     imgsz = torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]
+    #
+    #     # Targets
+    #     targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+    #     targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
+    #     gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
+    #     mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
+    #
+    #     # Pboxes
+    #     pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
+    #
+    #     _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
+    #         pred_scores.detach().sigmoid(),
+    #         (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+    #         anchor_points * stride_tensor,
+    #         gt_labels,
+    #         gt_bboxes,
+    #         mask_gt,
+    #     )
+    #
+    #     target_scores_sum = max(target_scores.sum(), 1)
+    #
+    #     # Cls loss with optional class weighting
+    #     bce_loss = self.bce(pred_scores, target_scores.to(dtype))  # (bs, num_anchors, nc)
+    #     if self.class_weights is not None:
+    #         bce_loss *= self.class_weights
+    #     loss[1] = bce_loss.sum() / target_scores_sum  # BCE
+    #
+    #     # Bbox loss
+    #     if fg_mask.sum():
+    #         loss[0], loss[2] = self.bbox_loss(
+    #             pred_distri,
+    #             pred_bboxes,
+    #             anchor_points,
+    #             target_bboxes / stride_tensor,
+    #             target_scores,
+    #             target_scores_sum,
+    #             fg_mask,
+    #             imgsz,
+    #             stride_tensor,
+    #         )
+    #
+    #     loss[0] *= self.hyp.box  # box gain
+    #     loss[1] *= self.hyp.cls  # cls gain
+    #     loss[2] *= self.hyp.dfl  # dfl gain
+    #     return (
+    #         (fg_mask, target_gt_idx, target_bboxes, anchor_points, stride_tensor),
+    #         loss,
+    #         loss.detach(),
+    #     )  # loss(box, cls, dfl)
+
+    def get_assigned_targets_and_loss(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> tuple:  #TODO: Daixb20260711  考虑忽略区域的代码。
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size and return foreground mask and
         target indices.
         """
@@ -429,17 +493,44 @@ class v8DetectionLoss:
             gt_bboxes,
             mask_gt,
         )
+        #TODO: Daixb20260711 ---------- 新增：忽略区域过滤 （所有预测框）----------
+        ignore_bboxes = batch.get('ignore_bboxes', None)
+        ignore_anchor_mask = None
+        if ignore_bboxes is not None:
+            batch_size = pred_bboxes.shape[0]            # 对每个图像，计算所有预测框与忽略框的 IoA
+            ignore_masks = []
+            for i in range(batch_size):
+                ig_bbox = ignore_bboxes[i] if i < len(ignore_bboxes) else None
+                if ig_bbox is not None and ig_bbox.shape[0] > 0:
+                    pred_bbox_i = pred_bboxes[i]  #确保维度为 (num_anchors, 4) (num_anchors, 4)
+                    ious = box_ioa1_torch(pred_bbox_i, ig_bbox) # 计算 IoA (交集/预测框面积)   (num_anchors, num_ignore)
+                    max_iou, _ = ious.max(dim=1)  # (num_anchors,)
+                    mask = max_iou > self.ignore_iou_thres     # 标记重叠超过阈值的锚点
+                    ignore_masks.append(mask)
+                else:
+                    ignore_masks.append(torch.zeros(pred_bboxes.shape[1], dtype=torch.bool, device=pred_bboxes.device))
+
+            ignore_anchor_mask = torch.stack(ignore_masks)  # (batch_size, num_anchors)
+        #TODO: Daixb20260711 ---------------------------------------
 
         target_scores_sum = max(target_scores.sum(), 1)
 
         # Cls loss with optional class weighting
         bce_loss = self.bce(pred_scores, target_scores.to(dtype))  # (bs, num_anchors, nc)
+        if ignore_anchor_mask is not None:        # 应用忽略掩码
+            ignore_exp = ignore_anchor_mask.unsqueeze(-1).float()      # 扩展维度到类别数  (bs, num_anchors, 1)
+            bce_loss = bce_loss * (1 - ignore_exp)
+
         if self.class_weights is not None:
             bce_loss *= self.class_weights
         loss[1] = bce_loss.sum() / target_scores_sum  # BCE
 
-        # Bbox loss
-        if fg_mask.sum():
+        if ignore_anchor_mask is not None:   # 在计算回归损失之前，根据忽略掩码过滤 fg_mask
+            fg_mask = fg_mask.bool()            # 将 fg_mask 转为布尔类型以避免 AMP 半精度问题
+            ignore_anchor_mask = ignore_anchor_mask.bool()
+            fg_mask = fg_mask & ~ignore_anchor_mask      # 将 fg_mask 中对应忽略位置的置为 False
+
+        if fg_mask.sum():        # Bbox loss
             loss[0], loss[2] = self.bbox_loss(
                 pred_distri,
                 pred_bboxes,
@@ -467,11 +558,9 @@ class v8DetectionLoss:
         """Parse model predictions to extract features."""
         return preds[1] if isinstance(preds, tuple) else preds
 
-    def __call__(
-        self,
+    def __call__(self,
         preds: dict[str, torch.Tensor] | tuple[torch.Tensor, dict[str, torch.Tensor]],
-        batch: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch: dict[str, torch.Tensor],) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
         return self.loss(self.parse_output(preds), batch)
 

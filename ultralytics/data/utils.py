@@ -241,7 +241,69 @@ def verify_image_mask(args: tuple) -> tuple:
     return None, None, None, nm, nf, nc, msg
 
 
-def verify_image_label(args: tuple) -> list:
+# def verify_image_label(args: tuple) -> list:        # TODO: 原有方法：不考虑忽略区域
+#     """Verify one image-label pair."""
+#     im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls = args
+#     # Number (missing, found, empty, corrupt), message, segments, keypoints
+#     nm, nf, ne, nc, msg, segments, keypoints = 0, 0, 0, 0, "", [], None
+#     try:
+#         # Verify images
+#         msg, shape = check_image(im_file)
+#         msg = f"{prefix}{msg}" if msg else ""
+#
+#         # Verify labels
+#         if os.path.isfile(lb_file):
+#             nf = 1  # label found
+#             with open(lb_file, encoding="utf-8") as f:
+#                 lb = [x.split() for x in f.read().strip().splitlines() if len(x)]
+#                 if any(len(x) > 6 for x in lb) and (not keypoint):  # is segment
+#                     classes = np.array([x[0] for x in lb], dtype=np.float32)
+#                     segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in lb]  # (cls, xy1...)
+#                     lb = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)  # (cls, xywh)
+#                 lb = np.array(lb, dtype=np.float32)
+#             if nl := len(lb):
+#                 if keypoint:
+#                     assert lb.shape[1] == (5 + nkpt * ndim), f"labels require {(5 + nkpt * ndim)} columns each"
+#                     points = lb[:, 5:].reshape(-1, ndim)[:, :2]
+#                 else:
+#                     assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
+#                     points = lb[:, 1:]
+#                 # Coordinate points check with 1% tolerance
+#                 assert points.max() <= 1.01, f"non-normalized or out of bounds coordinates {points[points > 1.01]}"
+#                 assert lb.min() >= -0.01, f"negative class labels or coordinate {lb[lb < -0.01]}"
+#
+#                 # All labels
+#                 max_cls = 0 if single_cls else lb[:, 0].max()  # max label count
+#                 assert max_cls < num_cls, (
+#                     f"Label class {int(max_cls)} exceeds dataset class count {num_cls}. "
+#                     f"Possible class labels are 0-{num_cls - 1}"
+#                 )
+#                 _, i = np.unique(lb, axis=0, return_index=True)
+#                 if len(i) < nl:  # duplicate row check
+#                     lb = lb[i]  # remove duplicates
+#                     if segments:
+#                         segments = [segments[x] for x in i]
+#                     msg = f"{prefix}{im_file}: {nl - len(i)} duplicate labels removed"
+#             else:
+#                 ne = 1  # label empty
+#                 lb = np.zeros((0, (5 + nkpt * ndim) if keypoint else 5), dtype=np.float32)
+#         else:
+#             nm = 1  # label missing
+#             lb = np.zeros((0, (5 + nkpt * ndim) if keypoint else 5), dtype=np.float32)
+#         if keypoint:
+#             keypoints = lb[:, 5:].reshape(-1, nkpt, ndim)
+#             if ndim == 2:
+#                 kpt_mask = np.where((keypoints[..., 0] < 0) | (keypoints[..., 1] < 0), 0.0, 1.0).astype(np.float32)
+#                 keypoints = np.concatenate([keypoints, kpt_mask[..., None]], axis=-1)  # (nl, nkpt, 3)
+#         lb = lb[:, :5]
+#         return im_file, lb, shape, segments, keypoints, nm, nf, ne, nc, msg
+#     except Exception as e:
+#         nc = 1
+#         msg = f"{prefix}{im_file}: ignoring corrupt image/label: {e}"
+#         return [None, None, None, None, None, nm, nf, ne, nc, msg]
+
+
+def verify_image_label(args: tuple) -> list:   ##TODO: Daixb202607090919新增：分离正常标签和忽略标签 ----------
     """Verify one image-label pair."""
     im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls = args
     # Number (missing, found, empty, corrupt), message, segments, keypoints
@@ -261,29 +323,41 @@ def verify_image_label(args: tuple) -> list:
                     segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in lb]  # (cls, xy1...)
                     lb = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)  # (cls, xywh)
                 lb = np.array(lb, dtype=np.float32)
+
             if nl := len(lb):
                 if keypoint:
                     assert lb.shape[1] == (5 + nkpt * ndim), f"labels require {(5 + nkpt * ndim)} columns each"
-                    points = lb[:, 5:].reshape(-1, ndim)[:, :2]
+                    points = lb[:, 5:].reshape(-1, ndim)[:, :2]  # shape (nl, 2)
                 else:
                     assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
-                    points = lb[:, 1:]
-                # Coordinate points check with 1% tolerance
-                assert points.max() <= 1.01, f"non-normalized or out of bounds coordinates {points[points > 1.01]}"
-                assert lb.min() >= -0.01, f"negative class labels or coordinate {lb[lb < -0.01]}"
+                    points = lb[:, 1:]  # shape (nl, 4)
 
-                # All labels
-                max_cls = 0 if single_cls else lb[:, 0].max()  # max label count
-                assert max_cls < num_cls, (
-                    f"Label class {int(max_cls)} exceeds dataset class count {num_cls}. "
-                    f"Possible class labels are 0-{num_cls - 1}"
-                )
+                ##TODO: Daixb202607090919新增：分离正常标签和忽略标签 ----------
+                normal_mask = lb[:, 0] >= 0  # 类别 >=0 为正常标签，-1 为忽略
+                if np.any(normal_mask):  # 存在正常标签时才进行检查
+                    if keypoint:
+                        normal_points = points[normal_mask]  # 正常标签的关键点
+                    else:
+                        normal_points = lb[normal_mask, 1:]  # 正常标签的框坐标
+                    # 对正常标签进行坐标范围检查（允许 1% 容差）
+                    assert normal_points.max() <= 1.01, (f"non-normalized or out of bounds coordinates {normal_points[normal_points > 1.01]}")
+                    assert normal_points.min() >= -0.01, (f"negative class labels or coordinate {normal_points[normal_points < -0.01]}")
+
+                    # 检查正常标签的类别索引是否超出数据集类别数
+                    max_cls = 0 if single_cls else lb[normal_mask, 0].max()
+                    assert max_cls < num_cls, (f"Label class {int(max_cls)} exceeds dataset class count {num_cls}. "
+                        f"Possible class labels are 0-{num_cls - 1}")
+                # 对于 -1 标签，不进行任何检查，直接保留
+                # ---------------------------------------------
+
+                #TODO: Daixb202607090919去除重复行（包括 -1 行和正常行）
                 _, i = np.unique(lb, axis=0, return_index=True)
                 if len(i) < nl:  # duplicate row check
                     lb = lb[i]  # remove duplicates
                     if segments:
                         segments = [segments[x] for x in i]
                     msg = f"{prefix}{im_file}: {nl - len(i)} duplicate labels removed"
+
             else:
                 ne = 1  # label empty
                 lb = np.zeros((0, (5 + nkpt * ndim) if keypoint else 5), dtype=np.float32)

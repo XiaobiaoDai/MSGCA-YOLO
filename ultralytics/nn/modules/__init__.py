@@ -59,6 +59,8 @@ from .block import (
     ResNetLayer,
     SCDown,
     TorchVision,
+    MSGA,  #TODO： Daixb202607141607 新增多尺度注意力MSGA
+    CACBL,  #TODO： Daixb202607141607 新增坐标注意力CACBL
 )
 from .conv import (
     CBAM,
@@ -189,4 +191,6 @@ __all__ = (
     "YOLOESegment",
     "YOLOESegment26",
     "v10Detect",
+    "MSGA", #TODO： Daixb202607141607 新增多尺度注意力MSGA
+    "CACBL", # TODO： Daixb202607141607 新增坐标注意力CACBL
 )

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+import pdb
 import warnings
 from collections import defaultdict
 from pathlib import Path
@@ -14,6 +15,11 @@ import torch
 
 from ultralytics.utils import LOGGER, DataExportMixin, SimpleClass, TryExcept, checks, plt_settings
 from ultralytics.utils.plotting import colors
+
+#TODO: Daixb202607121509 新增： 尺寸分组阈值（按像素面积）
+AREA_SMALL = 32**2      # 32**2=1024
+AREA_MEDIUM = 96**2     #  96**2=9216
+#TODO: Daixb202607121509 新增：小: < 1024, 中: 1024 ~ 9216, 大: >= 9216
 
 OKS_SIGMA = (
     np.array(
@@ -48,36 +54,81 @@ CITYSCAPES_WEIGHT = np.array(
 )
 
 
-def bbox_ioa(box1: np.ndarray, box2: np.ndarray, iou: bool = False, eps: float = 1e-7) -> np.ndarray:
+def bbox_ioa(box1: np.ndarray, box2: np.ndarray, iou: bool = False, eps: float = 1e-7) -> np.ndarray: #TODO: Daixb20260709 原代码。
     """Calculate the intersection over box2 area given box1 and box2.
-
     Args:
         box1 (np.ndarray): A numpy array of shape (N, 4) representing N bounding boxes in x1y1x2y2 format.
         box2 (np.ndarray): A numpy array of shape (M, 4) representing M bounding boxes in x1y1x2y2 format.
         iou (bool, optional): Calculate the standard IoU if True else return inter_area/box2_area.
         eps (float, optional): A small value to avoid division by zero.
-
     Returns:
         (np.ndarray): A numpy array of shape (N, M) representing the intersection over box2 area.
     """
     # Get the coordinates of bounding boxes
-    b1_x1, b1_y1, b1_x2, b1_y2 = box1.T
-    b2_x1, b2_y1, b2_x2, b2_y2 = box2.T
-
+    b1_x1, b1_y1, b1_x2, b1_y2 = box1.T.cpu() #TODO: Daixb202607092323 增加.cpu()
+    b2_x1, b2_y1, b2_x2, b2_y2 = box2.T.cpu() #TODO: Daixb202607092323 增加.cpu()
     # Intersection area
-    inter_area = (np.minimum(b1_x2[:, None], b2_x2) - np.maximum(b1_x1[:, None], b2_x1)).clip(0) * (
-        np.minimum(b1_y2[:, None], b2_y2) - np.maximum(b1_y1[:, None], b2_y1)
-    ).clip(0)
-
-    # Box2 area
-    area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)
+    inter_area = (np.minimum(b1_x2[:, None], b2_x2) - np.maximum(b1_x1[:, None], b2_x1)).clip(0) * (np.minimum(b1_y2[:, None], b2_y2) - np.maximum(b1_y1[:, None], b2_y1)).clip(0)
+    area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)    # Box2 area
     if iou:
         box1_area = (b1_x2 - b1_x1) * (b1_y2 - b1_y1)
         area = area + box1_area[:, None] - inter_area
 
-    # Intersection over box2 area
-    return inter_area / (area + eps)
+    return inter_area / (area + eps)    # Intersection over box2 area
 
+def box_ioa1_torch(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
+    """ Compute IoA (Intersection over Area of box1) between two sets of boxes.
+    IoA = intersection_area / area(box1)
+    Args:
+        box1 (torch.Tensor): (N, 4) in xyxy format.
+        box2 (torch.Tensor): (M, 4) in xyxy format.
+        eps (float): small value.
+    Returns:
+        (torch.Tensor): (N, M) IoA matrix.    """
+
+    # 确保输入至少为二维
+    if box1.dim() == 1:
+        box1 = box1.unsqueeze(0)
+    if box2.dim() == 1:
+        box2 = box2.unsqueeze(0)
+
+    if box1.numel() == 0 or box2.numel() == 0:    # 如果任一为空，返回空矩阵
+        return torch.zeros((box1.shape[0], box2.shape[0]), device=box1.device, dtype=box1.dtype)
+
+    # Unbind to avoid .chunk overhead
+    b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+    b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+
+    # Intersection area
+    inter_x1 = torch.max(b1_x1[:, None], b2_x1[None, :])
+    inter_y1 = torch.max(b1_y1[:, None], b2_y1[None, :])
+    inter_x2 = torch.min(b1_x2[:, None], b2_x2[None, :])
+    inter_y2 = torch.min(b1_y2[:, None], b2_y2[None, :])
+    inter_w = (inter_x2 - inter_x1).clamp(min=0)
+    inter_h = (inter_y2 - inter_y1).clamp(min=0)
+    inter_area = inter_w * inter_h
+
+    area1 = (b1_x2 - b1_x1) * (b1_y2 - b1_y1) + eps    # Area of box1 (prediction boxes)
+    return inter_area / area1[:, None]
+
+def bbox_ioa2(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7) -> np.ndarray:  #TODO: Daixb202607111621 改进代码： Intersection over box2 area
+    """Calculate the intersection over box2 area given box1 and box2.
+    Args:
+        box1 (np.ndarray): A numpy array of shape (N, 4) representing N bounding boxes in x1y1x2y2 format.
+        box2 (np.ndarray): A numpy array of shape (M, 4) representing M bounding boxes in x1y1x2y2 format.
+        iou (bool, optional): Calculate the standard IoU if True else return inter_area/box2_area.
+        eps (float, optional): A small value to avoid division by zero.
+    Returns:
+        (np.ndarray): A numpy array of shape (N, M) representing the intersection over box2 area.
+    """
+    # Get the coordinates of bounding boxes
+    b1_x1, b1_y1, b1_x2, b1_y2 = box1.T.cpu() #TODO: Daixb202607092323 增加.cpu()
+    b2_x1, b2_y1, b2_x2, b2_y2 = box2.T.cpu() #TODO: Daixb202607092323 增加.cpu()
+    # Intersection area
+    inter_area = (np.minimum(b1_x2[:, None], b2_x2) - np.maximum(b1_x1[:, None], b2_x1)).clip(0) * (np.minimum(b1_y2[:, None], b2_y2) - np.maximum(b1_y1[:, None], b2_y1)).clip(0)
+    area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)    # Box2 area
+
+    return inter_area / (area + eps)    # Intersection over box2 area
 
 def box_iou(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
     """Calculate intersection-over-union (IoU) of boxes.
@@ -792,20 +843,9 @@ def compute_ap(recall: list[float], precision: list[float]) -> tuple[float, np.n
     return ap, mpre, mrec
 
 
-def ap_per_class(
-    tp: np.ndarray,
-    conf: np.ndarray,
-    pred_cls: np.ndarray,
-    target_cls: np.ndarray,
-    plot: bool = False,
-    on_plot=None,
-    save_dir: Path = Path(),
-    names: dict[int, str] | None = None,
-    eps: float = 1e-16,
-    prefix: str = "",
-) -> tuple:
+def ap_per_class(tp: np.ndarray, conf: np.ndarray,  pred_cls: np.ndarray,  target_cls: np.ndarray,  plot: bool = False,  on_plot=None,
+                 save_dir: Path = Path(),  names: dict[int, str] | None = None,  eps: float = 1e-16,   prefix: str = "", ) -> tuple:
     """Compute the average precision per class for object detection evaluation.
-
     Args:
         tp (np.ndarray): Binary array indicating whether the detection is correct (True) or not (False).
         conf (np.ndarray): Array of confidence scores of the detections.
@@ -838,7 +878,7 @@ def ap_per_class(
     tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
 
     # Find unique classes
-    unique_classes, nt = np.unique(target_cls, return_counts=True)
+    unique_classes, nt = np.unique(target_cls, return_counts=True)  #unique_classes = array([          0], dtype=float32)； nt=array([324])
     nc = unique_classes.shape[0]  # number of classes, number of detections
 
     # Create Precision-Recall curve and compute AP for each class
@@ -862,7 +902,7 @@ def ap_per_class(
         r_curve[ci] = np.interp(-x, -conf[i], recall[:, 0], left=0)  # negative x, xp because xp decreases
 
         # Precision
-        precision = tpc / (tpc + fpc)  # precision curve
+        precision = tpc / (tpc + fpc)  # 计算该类别的 Recall 和 Precision curve
         p_curve[ci] = np.interp(-x, -conf[i], precision[:, 0], left=1)  # p at pr_score
 
         # AP from recall-precision curve
@@ -886,8 +926,8 @@ def ap_per_class(
     p, r, f1 = p_curve[:, i], r_curve[:, i], f1_curve[:, i]  # max-F1 precision, recall, F1 values
     tp = (r * nt).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
-    return tp, fp, p, r, f1, ap, unique_classes.astype(int), p_curve, r_curve, f1_curve, x, prec_values
 
+    return tp, fp, p, r, f1, ap, unique_classes.astype(int), p_curve, r_curve, f1_curve, x, prec_values
 
 class Metric(SimpleClass):
     """Class for computing evaluation metrics for Ultralytics YOLO models.
@@ -919,13 +959,28 @@ class Metric(SimpleClass):
 
     def __init__(self) -> None:
         """Initialize a Metric instance for computing evaluation metrics for the YOLO model."""
-        self.p = []  # (nc, )
+        self.p = []  # (nc, ) 全局
         self.r = []  # (nc, )
         self.f1 = []  # (nc, )
         self.all_ap = []  # (nc, 10)
         self.ap_class_index = []  # (nc, )
         self.nc = 0
         self.image_metrics = {}
+        self.mr_conf50 = 0.0          #TODO: Daixb202607100841 新增：全局 MR @ IoU=0.5, conf=0.5
+        self.mr_conf50_per_class = {} #TODO: Daixb202607100841 新增：每个类别的 MR
+        self.lamr = {}
+
+        #TODO: Daixb202607121509 --- 新增：尺寸分组指标 ---
+        self.metrics_by_size = {}  # 键: 'small', 'medium', 'large'
+        for size in ['small', 'medium', 'large']: # 每个尺寸对应一个子Metric对象（这里直接存储字典，也可用另一个Metric实例）
+            self.metrics_by_size[size] = {
+                'p': [], 'r': [], 'f1': [], 'all_ap': [], 'ap_class_index': [],
+                'mr_conf50': 0.0,
+                'lamr': {},
+                'nt_per_class': None,
+                'nt_per_image': None,
+            }
+        #TODO: Daixb202607121509 全局 MR 和 LAMR（保留之前添加的）
 
     @property
     def ap50(self) -> np.ndarray | list:
@@ -1027,18 +1082,7 @@ class Metric(SimpleClass):
                 - px (list): X values for the curves.
                 - prec_values (list): Precision values for each class.
         """
-        (
-            self.p,
-            self.r,
-            self.f1,
-            self.all_ap,
-            self.ap_class_index,
-            self.p_curve,
-            self.r_curve,
-            self.f1_curve,
-            self.px,
-            self.prec_values,
-        ) = results
+        (self.p, self.r, self.f1, self.all_ap,  self.ap_class_index,  self.p_curve, self.r_curve, self.f1_curve, self.px, self.prec_values, ) = results
 
     def clear_image_metrics(self) -> None:
         """Clear stored per-image metrics from the current validation run."""
@@ -1093,7 +1137,6 @@ class Metric(SimpleClass):
             "fn": int(fn),
         }
 
-
 class DetMetrics(SimpleClass, DataExportMixin):
     """Utility class for computing detection metrics such as precision, recall, and mean average precision (mAP).
 
@@ -1124,7 +1167,6 @@ class DetMetrics(SimpleClass, DataExportMixin):
 
     def __init__(self, names: dict[int, str] | None = None) -> None:
         """Initialize a DetMetrics instance with class names.
-
         Args:
             names (dict[int, str], optional): Dictionary of class names.
         """
@@ -1134,10 +1176,22 @@ class DetMetrics(SimpleClass, DataExportMixin):
         self.stats = dict(tp=[], conf=[], pred_cls=[], target_cls=[], target_img=[])
         self.nt_per_class = None
         self.nt_per_image = None
+        self.n_images = 0  # TODO: Daixb202607090756 新增：用于 LAMR 计算
 
-    def update_stats(self, stat: dict[str, Any]) -> None:
+        #TODO: Daixb202607121515 --- 新增：尺寸分组 ---
+        self.size_groups = {
+            'small': {'area_min': 0, 'area_max': AREA_SMALL},
+            'medium': {'area_min': AREA_SMALL, 'area_max': AREA_MEDIUM},
+            'large': {'area_min': AREA_MEDIUM, 'area_max': float('inf')},
+        }
+        self.stats_by_size = {key: dict(tp=[], conf=[], pred_cls=[], target_cls=[], target_img=[]) for key in self.size_groups}
+        self.box_by_size = {key: Metric() for key in self.size_groups}
+        self.nt_per_class_by_size = {}
+        self.nt_per_image_by_size = {}
+        #TODO: Daixb202607121515 --- ----------------------------- ---
+
+    def update_stats(self, stat: dict[str, Any]) -> None:  # TODO: 原有方法：不分大中小尺度。
         """Update statistics by appending new values to existing stat collections.
-
         Args:
             stat (dict[str, Any]): Dictionary containing new statistical values to append. Keys should match existing
                 keys in self.stats.
@@ -1146,35 +1200,269 @@ class DetMetrics(SimpleClass, DataExportMixin):
             self.stats[k].append(stat[k])
         self.box.update_image_metrics(stat["tp"], stat["target_cls"], stat["pred_cls"], stat["im_name"])
 
-    def process(self, save_dir: Path = Path("."), plot: bool = False, on_plot=None) -> dict[str, np.ndarray]:
-        """Process predicted results for object detection and update metrics.
+    def update_stats_by_size(self, size_key: str, stat: dict[str, Any]) -> None:  #TODO: Daixb202607121520 新增支持扩展列表方法：区分大中小尺度。
+        """按尺寸分组更新统计，支持 extend 列表/数组。"""
+        if size_key not in self.stats_by_size:
+            return
+        for k in self.stats_by_size[size_key].keys():
+            val = stat.get(k)
+            if val is not None:
+                if isinstance(val, (list, np.ndarray)):
+                    self.stats_by_size[size_key][k].append(val)     # 直接追加整个数组，不要拆解
 
+    def _compute_mr(self, stats: dict, metric_obj: Metric = None) -> None: #TODO: Daixb202607121520 新增辅助方法 _compute_mr
+        """计算 MR @ IoU=0.5, conf>=0.5，存储到 metric_obj 或 self.box。"""
+        if stats["tp"].size == 0 or stats["target_cls"].size == 0:
+            mr = 1.0
+            mr_per_class = {}
+        else:
+            conf = stats["conf"]
+            tp_05 = stats["tp"][:, 0]
+            target_cls = stats["target_cls"]
+            keep = conf >= 0.5
+            tp_keep = tp_05[keep]
+            total_targets = len(target_cls)
+            recall = tp_keep.sum() / total_targets if total_targets > 0 else 0.0
+            mr = 1 - recall
+            # 每类
+            mr_per_class = {}
+            for c in np.unique(target_cls):
+                if c < 0: continue
+                mask = target_cls == c
+                n_c = mask.sum()
+                if n_c == 0: continue
+                pred_mask = stats["pred_cls"] == c
+                conf_c = conf[pred_mask]
+                tp_c = tp_05[pred_mask]
+                keep_c = conf_c >= 0.5
+                tp_c_keep = tp_c[keep_c]
+                recall_c = tp_c_keep.sum() / n_c if n_c > 0 else 0.0
+                mr_per_class[int(c)] = 1 - recall_c
+        if metric_obj is None:
+            self.box.mr_conf50 = mr
+            self.box.mr_conf50_per_class = mr_per_class
+        else:
+            metric_obj.mr_conf50 = mr
+            metric_obj.mr_conf50_per_class = mr_per_class
+
+    def _compute_lamr(self, stats: dict, n_images: int) -> dict:   # TODO: Daixb202607091340  添加 _compute_lamr 方法。
+        """  计算每个类别的对数平均漏检率（LAMR）。  FPPI 范围：1e-2 ~ 1e0 (对数空间取9个点)   """
+        tp = stats["tp"]  # (N, 10), 使用 IoU=0.5 即 tp[:, 0]
+        conf = stats["conf"]
+        pred_cls = stats["pred_cls"]
+        target_cls = stats["target_cls"]
+        unique_classes = np.unique(target_cls)
+        lamr_results = {}
+        # FPPI 采样点（对数均匀分布）
+        fppi_points = np.logspace(-2, 0, 9)  # [0.01, 0.0178, ..., 1.0]
+        for c in unique_classes:
+            if c < 0:  # 忽略 -1 类
+                continue
+            pred_mask = pred_cls == c            # 筛选该类别的预测和真实目标
+            target_mask = target_cls == c
+            n_targets = target_mask.sum()
+
+            if n_targets == 0:
+                continue
+
+            # 取 IoU=0.5 的 TP 标志
+            tp_c = tp[pred_mask, 0]  # (N_c,)
+            conf_c = conf[pred_mask]  # (N_c,)
+
+            if tp_c.size == 0:  # TODO: Daixb202607130831----- 新增：无预测框，漏检率为 1.0
+                lamr_results[int(c)] = 1.0
+                continue
+
+            # 按置信度降序排序
+            order = np.argsort(-conf_c)
+            tp_sorted = tp_c[order]
+
+            # 计算累积 FP 和 FN
+            # FP = 累计预测数 - 累计 TP
+            cum_preds = np.arange(1, len(tp_sorted) + 1)
+            cum_tp = tp_sorted.cumsum()
+            cum_fp = cum_preds - cum_tp
+            cum_fn = n_targets - cum_tp
+
+            # 计算 FPPI 和 Miss Rate
+            fppi = cum_fp / n_images
+            miss_rate = cum_fn / n_targets
+
+            # 在对数空间插值
+            # 注意：fppi 可能不是严格递增（因重复置信度），np.interp 要求 x 单调递增
+            # 我们按 fppi 排序以保证单调性
+            sort_idx = np.argsort(fppi)
+            fppi_sorted = fppi[sort_idx]
+            miss_rate_sorted = miss_rate[sort_idx]
+
+            # 插值：超出 fppi 范围的点，左侧取 1.0（最大漏检），右侧取最后一个值
+            mr_interp = np.interp(fppi_points, fppi_sorted, miss_rate_sorted,
+                                            left=1.0,  # FPPI 小于最小值时，漏检率为 1.0
+                                            right=miss_rate_sorted[-1] if len(miss_rate_sorted) > 0 else 0.0 )
+
+            # 取平均得到 LAMR
+            lamr = np.mean(mr_interp)
+            lamr_results[int(c)] = float(lamr)
+
+        return lamr_results
+
+    # def process(self, save_dir: Path = Path("."), plot: bool = False, on_plot=None) -> dict[str, np.ndarray]:       # TODO: 原有方法：不考虑忽略区域
+    #     """Process predicted results for object detection and update metrics.
+    #
+    #     Args:
+    #         save_dir (Path): Directory to save plots. Defaults to Path(".").
+    #         plot (bool): Whether to plot precision-recall curves. Defaults to False.
+    #         on_plot (callable, optional): Function to call after plots are generated. Defaults to None.
+    #
+    #     Returns:
+    #         (dict[str, np.ndarray]): Dictionary containing concatenated statistics arrays.
+    #     """
+    #     stats = {k: np.concatenate(v, 0) for k, v in self.stats.items()}  # to numpy
+    #     if not stats:
+    #         return stats
+    #     results = ap_per_class(
+    #         stats["tp"],
+    #         stats["conf"],
+    #         stats["pred_cls"],
+    #         stats["target_cls"],
+    #         plot=plot,
+    #         save_dir=save_dir,
+    #         names=self.names,
+    #         on_plot=on_plot,
+    #         prefix="Box",
+    #     )[2:]
+    #     self.box.nc = len(self.names)
+    #     self.box.update(results)
+    #     self.nt_per_class = np.bincount(stats["target_cls"].astype(int), minlength=len(self.names))
+    #     self.nt_per_image = np.bincount(stats["target_img"].astype(int), minlength=len(self.names))
+    #     return stats
+
+    def process(self, save_dir: Path = Path("."), plot: bool = False, on_plot=None) -> dict[str, np.ndarray]: #TODO: Daixb202607100841---------- 新增：过滤掉 target_cls == -1 的样本 ----------
+        """Process predicted results for object detection and update metrics.
         Args:
             save_dir (Path): Directory to save plots. Defaults to Path(".").
             plot (bool): Whether to plot precision-recall curves. Defaults to False.
             on_plot (callable, optional): Function to call after plots are generated. Defaults to None.
-
         Returns:
             (dict[str, np.ndarray]): Dictionary containing concatenated statistics arrays.
         """
         stats = {k: np.concatenate(v, 0) for k, v in self.stats.items()}  # to numpy
         if not stats:
             return stats
-        results = ap_per_class(
-            stats["tp"],
-            stats["conf"],
-            stats["pred_cls"],
-            stats["target_cls"],
-            plot=plot,
-            save_dir=save_dir,
-            names=self.names,
-            on_plot=on_plot,
-            prefix="Box",
-        )[2:]
-        self.box.nc = len(self.names)
+
+        #TODO: Daixb202607090934  新增：过滤掉 target_cls == -1 的样本 ----------
+        if stats["target_cls"].size > 0:        # 过滤 target_cls == -1
+            valid_mask = stats["target_cls"] >= 0
+            if not valid_mask.all():
+                stats["target_cls"] = stats["target_cls"][valid_mask]
+
+        # 计算过滤后的 TP（但 tp 已经在 _process_batch 中被修改）；注意：tp 已经应用了忽略过滤，所以 stats["tp"] 已经是过滤后的值
+        # total_tp_after = stats["tp"].sum() if stats["tp"].size > 0 else 0
+        # LOGGER.info(f"Ignore region filtering: TP changed from {total_tp_before} to {total_tp_after} (delta: {total_tp_after - total_tp_before})")
+        # --------------------------------------------------------
+        results = ap_per_class(stats["tp"], stats["conf"], stats["pred_cls"], stats["target_cls"], plot=plot, save_dir=save_dir, names=self.names, on_plot=on_plot, prefix="Box", )[2:]
+        #TODO: tp, fp, p, r, f1, ap, unique_classes.astype(int), p_curve, r_curve, f1_curve, x, prec_values
+        self.box.nc = len(self.names)   #self.names={0: 'Ped', 1: 'Bic', 2: 'Mot'}
         self.box.update(results)
         self.nt_per_class = np.bincount(stats["target_cls"].astype(int), minlength=len(self.names))
         self.nt_per_image = np.bincount(stats["target_img"].astype(int), minlength=len(self.names))
+
+        #TODO: Daixb202607100841 ---------- 新增：计算 LAMR ----------
+        if self.n_images > 0 and stats["tp"].size > 0:
+            lamr_dict = self._compute_lamr(stats, self.n_images)
+            self.box.lamr = lamr_dict  # 存储到 Metric 对象中 lamr_dict={0: 1.0}
+
+        self._compute_mr(stats)  # 新增辅助方法
+        #TODO: Daixb202607100841------------------------------------
+        for size_key in self.size_groups:
+            st = {k: np.concatenate(v, 0) for k, v in self.stats_by_size[size_key].items() if v}
+            if not st or st["target_cls"].size == 0:
+                continue
+
+            valid_mask = st["target_cls"] >= 0     # 过滤 -1
+            if not valid_mask.all():
+                st["target_cls"] = st["target_cls"][valid_mask]
+            # 计算 AP
+            res = ap_per_class(st["tp"], st["conf"], st["pred_cls"], st["target_cls"],
+                plot=False,  # 避免生成过多图
+                names=self.names, prefix=f"Box_{size_key}",   )[2:]
+            self.box_by_size[size_key].nc = len(self.names)
+            self.box_by_size[size_key].update(res)
+            # 存储每类统计（用于后续）
+            self.nt_per_class_by_size[size_key] = np.bincount(st["target_cls"].astype(int), minlength=len(self.names))
+            self.nt_per_image_by_size[size_key] = np.bincount(st["target_img"].astype(int), minlength=len(self.names))
+            if self.n_images > 0 and st["tp"].size > 0:
+                self.box_by_size[size_key].lamr = self._compute_lamr(st, self.n_images) # 计算 LAMR
+
+            self._compute_mr(st, metric_obj=self.box_by_size[size_key])  # 计算 MR: 传入该组的 Metric 对象
+
+        #TODO: Daixb202607121712 ---------- 新增：3. 类别-尺寸分组指标 (针对 Ped 类别)  ----------
+        # TODO: Daixb202607131433 新增：类别-尺寸分组指标 (所有类别) 尺寸分组指标 ----------
+        if not hasattr(self, 'box_by_class_size'):
+            self.box_by_class_size = {}
+        for class_id in range(len(self.names)):  # 遍历所有类别
+            class_name = self.names[class_id]  # 类别名称，用于后续命名
+            for size_key in self.size_groups:
+                st = {k: np.concatenate(v, 0) for k, v in self.stats_by_size[size_key].items() if v}
+                if not st or st["target_cls"].size == 0:
+                    continue
+                target_mask = st["target_cls"] == class_id
+                pred_mask = st["pred_cls"] == class_id
+                if not target_mask.any() and not pred_mask.any():
+                    continue
+                sub_st = {
+                    'tp': st['tp'][pred_mask] if pred_mask.any() else np.empty((0, st['tp'].shape[1]), dtype=bool),
+                    'conf': st['conf'][pred_mask] if pred_mask.any() else np.empty(0),
+                    'pred_cls': st['pred_cls'][pred_mask] if pred_mask.any() else np.empty(0),
+                    'target_cls': st['target_cls'][target_mask] if target_mask.any() else np.empty(0),
+                    'target_img': st['target_img'][target_mask] if target_mask.any() else np.empty(0),
+                }
+                if sub_st['target_cls'].size == 0:
+                    continue
+                res = ap_per_class(sub_st['tp'], sub_st['conf'], sub_st['pred_cls'], sub_st['target_cls'],
+                                   plot=False, names={class_id: class_name}, prefix=f"Box_{size_key}_class{class_id}", )[2:]
+                metric = Metric()
+                metric.nc = 1
+                metric.update(res)
+                self._compute_mr(sub_st, metric_obj=metric)
+                if self.n_images > 0 and sub_st['tp'].size > 0:
+                    metric.lamr = self._compute_lamr(sub_st, self.n_images)
+                else:
+                    metric.lamr = {}
+                self.box_by_class_size[(class_id, size_key)] = metric
+        # TODO: Daixb202607131433----------------------------------------------------------------------------------------------------
+
+        #TODO: Daixb202607131609 ---------- 全局单类别指标（所有类别）----------
+        if not hasattr(self, 'box_by_class'):
+            self.box_by_class = {}
+        stats_global = stats  # 直接使用已过滤的 stats（不含 -1）
+        print(f"Global target classes: {np.unique(stats_global['target_cls'])}")
+        if stats_global and stats_global["target_cls"].size > 0:
+            for class_id in range(len(self.names)):  # 遍历所有类别
+                target_mask = stats_global["target_cls"] == class_id
+                pred_mask = stats_global["pred_cls"] == class_id
+                if not target_mask.any() and not pred_mask.any():
+                    continue
+                sub_st = {
+                    'tp': stats_global['tp'][pred_mask] if pred_mask.any() else np.empty((0, stats_global['tp'].shape[1]), dtype=bool),
+                    'conf': stats_global['conf'][pred_mask] if pred_mask.any() else np.empty(0),
+                    'pred_cls': stats_global['pred_cls'][pred_mask] if pred_mask.any() else np.empty(0),
+                    'target_cls': stats_global['target_cls'][target_mask] if target_mask.any() else np.empty(0), }
+
+                if sub_st['target_cls'].size == 0:
+                    continue
+                res = ap_per_class(sub_st['tp'], sub_st['conf'], sub_st['pred_cls'], sub_st['target_cls'],
+                    plot=False, names={class_id: self.names[class_id]}, prefix=f"Box_global_class{class_id}", )[2:]
+                metric = Metric()
+                metric.nc = 1
+                metric.update(res)
+                self._compute_mr(sub_st, metric_obj=metric)
+                if self.n_images > 0 and sub_st['tp'].size > 0:
+                    metric.lamr = self._compute_lamr(sub_st, self.n_images)
+                else:
+                    metric.lamr = {}
+                self.box_by_class[(class_id, None)] = metric
+
         return stats
 
     def clear_stats(self):
@@ -1214,12 +1502,135 @@ class DetMetrics(SimpleClass, DataExportMixin):
         """Return the average precision index per class."""
         return self.box.ap_class_index
 
+    # @property
+    # def results_dict(self) -> dict[str, float]:     # TODO: 原有方法：不计算MR_conf05_IoU05
+    #     """Return dictionary of computed performance metrics and statistics."""
+    #     keys = [*self.keys, "fitness"]
+    #     values = ((float(x) if hasattr(x, "item") else x) for x in ([*self.mean_results(), self.fitness]))
+    #     return dict(zip(keys, values))
+    # @property
+    # def results_dict(self) -> dict[str, float]:  #TODO: Daixb202607100912  新增：计算MR_conf05_IoU05
+    #     """Return dictionary of computed performance metrics and statistics."""
+    #     keys = [*self.keys, "fitness"]
+    #     # values = ((float(x) if hasattr(x, "item") else x) for x in ([*self.mean_results(), self.fitness]))
+    #     values = ((float(x) if hasattr(x, "item") else x) for x in ([*self.mean_results(), self.fitness, self.box.mr_conf50])) #TODO: Daixb202607100912  新增：计算MR_conf05_IoU05
+    #     return dict(zip(keys, values))
     @property
-    def results_dict(self) -> dict[str, float]:
+    def results_dict(self) -> dict[str, float]:  #TODO: Daixb202607100912  完善：计算MR_conf05_IoU05，TODO: Daixb202607121534  新增考虑大中小尺度
         """Return dictionary of computed performance metrics and statistics."""
-        keys = [*self.keys, "fitness"]
-        values = ((float(x) if hasattr(x, "item") else x) for x in ([*self.mean_results(), self.fitness]))
-        return dict(zip(keys, values))
+        d = { "metrics/precision(B)": self.box.mp,
+                "metrics/recall(B)": self.box.mr,
+                "metrics/mAP50(B)": self.box.map50,
+                "metrics/mAP50-95(B)": self.box.map,
+                "fitness": self.box.fitness(),
+               "mr_conf50": self.box.mr_conf50,  } #TODO: Daixb202607121534 返回全局和尺寸分组指标。
+        # TODO: Daixb202607112228可选：如果你还想看每个类别的 LAMR，可以按需添加，但为避免 csv 列过多，这里只加平均值
+        if hasattr(self.box, 'lamr') and self.box.lamr:        # LAMR (对数平均漏检率)
+            lamr_dict = self.box.lamr
+            avg_lamr = sum(lamr_dict.values()) / len(lamr_dict) if lamr_dict else 0.0
+            d["avg_lamr"] = float(avg_lamr)
+
+        for size_key in self.size_groups:     #TODO: Daixb202607121534  添加尺寸分组指标
+            box = self.box_by_size[size_key]
+            d[f"mAP50_{size_key}"] = box.map50
+            d[f"mAP50-95_{size_key}"] = box.map
+            if hasattr(box, 'mr_conf50'):
+                d[f"mr_conf50_{size_key}"] = box.mr_conf50            # MR
+
+            if hasattr(box, 'lamr'):            # if hasattr(box, 'lamr')  and box.lamr:
+                d[f"avg_lamr_{size_key}"] = sum(box.lamr.values()) / len(box.lamr) if box.lamr else 0.0            # LAMR（所有类别平均）
+
+        #TODO: Daixb202607121713  ----------不区分尺寸的全局单类别指标（所有类别） ----------
+        if not hasattr(self, 'box_by_class'):
+            self.box_by_class = {}
+        stats_global = {k: np.concatenate(v, 0) for k, v in self.stats.items() if v}
+        if stats_global and stats_global["target_cls"].size > 0:
+            for class_id in range(len(self.names)):  # 遍历所有类别
+                target_mask = stats_global["target_cls"] == class_id
+                pred_mask = stats_global["pred_cls"] == class_id
+                if not target_mask.any() and not pred_mask.any():
+                    continue
+                sub_st = {
+                    'tp': stats_global['tp'][pred_mask] if pred_mask.any() else np.empty((0, stats_global['tp'].shape[1]), dtype=bool),
+                    'conf': stats_global['conf'][pred_mask] if pred_mask.any() else np.empty(0),
+                    'pred_cls': stats_global['pred_cls'][pred_mask] if pred_mask.any() else np.empty(0),
+                    'target_cls': stats_global['target_cls'][target_mask] if target_mask.any() else np.empty(0),
+                    'target_img': stats_global['target_img'][target_mask] if target_mask.any() else np.empty(0),
+                }
+                if sub_st['target_cls'].size == 0:
+                    continue
+                res = ap_per_class(sub_st['tp'], sub_st['conf'], sub_st['pred_cls'], sub_st['target_cls'],
+                    plot=False, names={class_id: self.names[class_id]}, prefix=f"Box_global_class{class_id}",  )[2:]
+                metric = Metric()
+                metric.nc = 1
+                metric.update(res)
+                self._compute_mr(sub_st, metric_obj=metric)
+                if self.n_images > 0 and sub_st['tp'].size > 0:
+                    metric.lamr = self._compute_lamr(sub_st, self.n_images)
+                else:
+                    metric.lamr = {}
+                self.box_by_class[(class_id, None)] = metric
+            #TODO: Daixb202607121713 --------------------------------------------------
+
+        #TODO: Daixb202607131443---------- 添加各类别-尺寸指标 ----------
+        if hasattr(self, 'box_by_class_size'):
+            for class_id in range(len(self.names)):  # 遍历所有类别
+                class_name = self.names[class_id]
+                for size_key in self.size_groups:
+                    metric = self.box_by_class_size.get((class_id, size_key))
+                    if metric is not None:
+                        d[f"AP50_{class_name}_{size_key}"] = metric.map50
+                        d[f"AP50-95_{class_name}_{size_key}"] = metric.map
+                        if hasattr(metric, 'mr_conf50'):
+                            d[f"mr_conf50_{class_name}_{size_key}"] = metric.mr_conf50
+                        if hasattr(metric, 'lamr') and metric.lamr:
+                            # 由于只计算单类，lamr 字典键为该类别 ID
+                            lamr_val = metric.lamr.get(class_id, 1.0)
+                        else:
+                            lamr_val = 1.0
+                        d[f"lamr_{class_name}_{size_key}"] = lamr_val
+        #TODO: Daixb202607131530 全局单类别指标（所有类别）-----------------------------------------
+        if hasattr(self, 'box_by_class'):
+            for class_id in range(len(self.names)):
+                class_name = self.names[class_id]
+                metric = self.box_by_class.get((class_id, None))
+                if metric is not None:
+                    d[f"AP50_{class_name}"] = metric.map50
+                    d[f"AP50-95_{class_name}"] = metric.map
+                    if hasattr(metric, 'mr_conf50'):
+                        d[f"mr_conf50_{class_name}"] = metric.mr_conf50
+                    if hasattr(metric, 'lamr') and metric.lamr:
+                        lamr_val = metric.lamr.get(class_id, 1.0)  # 单类 LAMR 字典键为类别 ID
+                    else:
+                        lamr_val = 1.0
+                    d[f"lamr_{class_name}"] = lamr_val
+
+        #TODO: Daixb202607140815 ---------- 加权平均 LAMR（全局）----------
+        if hasattr(self.box, 'lamr') and self.box.lamr:
+            weights = self.nt_per_class.astype(np.float32)  # 全局各类目标数
+            weighted_sum = sum(self.box.lamr.get(i, 0.0) * weights[i] for i in range(len(self.names)))
+            total_weight = weights.sum()
+            d["lamr_weighted"] = weighted_sum / total_weight if total_weight > 0 else 1.0
+        else:
+            d["lamr_weighted"] = 1.0
+
+        #TODO: Daixb202607140815  ---------- 加权平均 LAMR（尺寸分组）----------
+        for size_key in self.size_groups:
+            box = self.box_by_size[size_key]
+            if hasattr(box, 'lamr') and box.lamr:
+                weights = self.nt_per_class_by_size.get(size_key, np.zeros(len(self.names), dtype=np.float32))
+                weighted_sum = sum(box.lamr.get(i, 0.0) * weights[i] for i in range(len(self.names)))
+                total_weight = weights.sum()
+                d[f"lamr_weighted_{size_key}"] = weighted_sum / total_weight if total_weight > 0 else 1.0
+            else:
+                d[f"lamr_weighted_{size_key}"] = 1.0
+
+        # TODO: Daixb202607140815  在返回 d 之前，将所有数值转换为百分数
+        for k, v in d.items():
+            if isinstance(v, (int, float)):
+                d[k] = round(v * 100, 4)  # 保留两位小数
+
+        return d
 
     @property
     def curves(self) -> list[str]:

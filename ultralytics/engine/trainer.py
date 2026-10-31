@@ -797,7 +797,6 @@ class BaseTrainer:
 
     def validate(self):
         """Run validation on val set using self.validator.
-
         Returns:
             (tuple): A tuple containing:
                 - metrics (dict | None): Dictionary of validation metrics, or None if validation was skipped.

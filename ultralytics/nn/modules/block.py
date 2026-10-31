@@ -52,6 +52,7 @@ __all__ = (
     "ResNetLayer",
     "SCDown",
     "TorchVision",
+    "MSGA",
 )
 
 
@@ -2071,3 +2072,149 @@ class RealNVP(nn.Module):
             self.float()
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
+
+
+#TODO: Daixb202607141544 ===添加注意力MSGA到 block.py 末尾 ====================
+class ChannelAttention(nn.Module):
+    """通道注意力模块 (CA)"""
+    def __init__(self, in_channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels // reduction, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // reduction, in_channels, 1, bias=False)
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return x * self.sigmoid(out)
+
+class SpatialAttention(nn.Module): #TODO： Daixb202607141607 新增多尺度注意力MSGA之空间注意力
+    """空间注意力模块 (SA)"""
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.cat([avg_out, max_out], dim=1)
+        out = self.conv(out)
+        return x * self.sigmoid(out)
+
+class MSGA(nn.Module):   #TODO： Daixb202607141607 新增多尺度注意力MSGA
+    """
+    Multi-Scale Global Attention 模块
+    输入: (B, C, H, W)  输出: (B, C, H, W)
+    """
+    def __init__(self, in_channels, out_channels=None):
+        super().__init__()
+        out_channels = out_channels or in_channels
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        self.conv7 = nn.Conv2d(in_channels, out_channels, 7, padding=3, bias=False)
+        self.conv5 = nn.Conv2d(in_channels, out_channels, 5, padding=2, bias=False)
+        self.conv3 = nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False)
+
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.ca = ChannelAttention(out_channels)
+        self.sa = SpatialAttention()
+
+    def forward(self, x):
+        out7 = self.conv7(x)
+        out5 = self.conv5(x)
+        out3 = self.conv3(x)
+        out = out7 + out5 + out3
+        out = self.bn(out)
+        out = self.relu(out)
+
+        out = self.ca(out)
+        out = self.sa(out)
+        return out
+
+class CoordinateAttention(nn.Module): #TODO： Daixb202607141655 新增坐标注意力CA
+    """Coordinate Attention module"""
+    def __init__(self, in_channels, reduction=32):
+        super().__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        mip = max(8, in_channels // reduction)
+        self.conv1 = nn.Conv2d(in_channels, mip, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mip)
+        self.act = nn.ReLU(inplace=True)
+        self.conv_h = nn.Conv2d(mip, in_channels, kernel_size=1, bias=False)
+        self.conv_w = nn.Conv2d(mip, in_channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        identity = x
+        n, c, h, w = x.size()
+        x_h = self.pool_h(x)  # (n,c,h,1)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (n,c,w,1) -> (n,c,1,w) ?
+        # 标准实现：将两个方向的特征拼接
+        y = torch.cat([x_h, x_w], dim=2)  # (n,c,h+w,1)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+        x_h, x_w = torch.split(y, [h, w], dim=2)  # 分开
+        x_w = x_w.permute(0, 1, 3, 2)  # (n,c,1,w) -> (n,c,w,1)??
+        # 实际上，标准CA的x_w应该是 (n,c,1,w) 形状，但我们需要保持与x_h一致？参考官方实现
+        # 我们采用更标准的实现：
+        # 实际上，上述split后，x_h shape (n,c,h,1), x_w shape (n,c,w,1)，然后x_w需转置为(n,c,1,w)
+        # 但sigmoid后的权重需广播，所以我们保持原有形状。
+        a_h = self.conv_h(x_h).sigmoid()  # (n,c,h,1)
+        a_w = self.conv_w(x_w).sigmoid()  # (n,c,w,1)
+        # 扩展并广播
+        out = identity * a_w * a_h
+        return out
+
+class CACBLBlock(nn.Module):  #TODO： Daixb202607141655 新增坐标注意力CA
+    """Basic block for CACBL: Grouped Conv + Channel Shuffle + CA + residual"""
+    def __init__(self, in_channels, out_channels, groups=4, reduction=32):
+        super().__init__()
+        self.groups = groups
+        # 分组卷积
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, groups=groups, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.act1 = nn.ReLU(inplace=True)
+        # 通道混洗
+        self.shuffle = nn.ChannelShuffle(groups)
+        # 坐标注意力
+        self.ca = CoordinateAttention(out_channels, reduction=reduction)
+        # 残差连接（若通道数变化则使用1x1）
+        self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+
+    def forward(self, x):
+        identity = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.act1(out)
+        out = self.shuffle(out)
+        out = self.ca(out)
+        return out + self.shortcut(identity)
+
+class CACBL(nn.Module): #TODO： Daixb202607141655 新增坐标注意力CACBL
+    """CACBL module: similar to C2f but uses CACBLBlock with grouped conv, shuffle, and CA"""
+    def __init__(self, in_channels, out_channels, n=1, shortcut=True, groups=4, reduction=32):
+        super().__init__()
+        self.c = int(out_channels // 2)  # 一半通道用于 shortcut
+        self.conv1 = Conv(in_channels, out_channels, 1, 1)  # 1x1 调整通道
+        # 构建多个 CACBLBlock
+        self.m = nn.ModuleList([CACBLBlock(self.c, self.c, groups, reduction) for _ in range(n)])
+        self.conv2 = Conv(out_channels, out_channels, 1, 1)  # 输出调整
+
+    def forward(self, x):
+        x = self.conv1(x)
+        # 分成两半：一半直接通过，一半通过多个块
+        x1, x2 = x.chunk(2, dim=1)
+        for block in self.m:
+            x1 = block(x1)
+        return self.conv2(torch.cat((x1, x2), dim=1))
