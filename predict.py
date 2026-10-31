@@ -1,4 +1,4 @@
-import  ultralytics
+import ultralytics
 from ultralytics import YOLO
 
 print(ultralytics.__version__)
@@ -16,10 +16,10 @@ print(ultralytics.__version__)
 #
 # results[0].show()# 显示结果
 
-model = YOLO("yolo26s.pt")# 加载你的模型
-metrics = model.val(data="E:/Datasets/NIRPed2021/miniNIRPed/NIRPed.yaml")# 运行验证
+model = YOLO("yolo26s.pt")  # 加载你的模型
+metrics = model.val(data="E:/Datasets/NIRPed2021/miniNIRPed/NIRPed.yaml")  # 运行验证
 
 # 打印关键指标
-print(f"mAP50-95: {metrics.box.map}")    # 平均精度 (mAP) @ [0.5:0.95]
-print(f"mAP50: {metrics.box.map50}")      # mAP @ IoU=0.5
-print(f"mAP75: {metrics.box.map75}")      # mAP @ IoU=0.75
+print(f"mAP50-95: {metrics.box.map}")  # 平均精度 (mAP) @ [0.5:0.95]
+print(f"mAP50: {metrics.box.map50}")  # mAP @ IoU=0.5
+print(f"mAP75: {metrics.box.map75}")  # mAP @ IoU=0.75
