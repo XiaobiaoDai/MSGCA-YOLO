@@ -1,56 +1,70 @@
 from collections import OrderedDict
 
 import torch
-import torch.nn as nn
+
 # from sympy.physics.units.systems.si import dimex
 from einops.layers.torch import Rearrange
+from torch import nn
+
+from nets.attention import ConvSelfAttention, CoordAtt, SPPConv
 from nets.CSPdarknet import darknet53
-from nets.attention import CoordAtt, ConvSelfAttention, SPPConv
 
 
 def conv2d(filter_in, filter_out, kernel_size, stride=1):
     pad = (kernel_size - 1) // 2 if kernel_size else 0
-    return nn.Sequential(OrderedDict([
-        ("conv", nn.Conv2d(filter_in, filter_out, kernel_size=kernel_size, stride=stride, padding=pad, bias=False)),
-        ("bn", nn.BatchNorm2d(filter_out)),
-        ("relu", nn.LeakyReLU(0.1)),
-    ]))
+    return nn.Sequential(
+        OrderedDict(
+            [
+                (
+                    "conv",
+                    nn.Conv2d(filter_in, filter_out, kernel_size=kernel_size, stride=stride, padding=pad, bias=False),
+                ),
+                ("bn", nn.BatchNorm2d(filter_out)),
+                ("relu", nn.LeakyReLU(0.1)),
+            ]
+        )
+    )
 
-#---------------------------------------------------#
+
+# ---------------------------------------------------#
 #   SPP结构，利用不同大小的池化核进行池化
 #   池化后堆叠
-#---------------------------------------------------#
+# ---------------------------------------------------#
 class SpatialPyramidPooling(nn.Module):
-    def __init__(self, pool_sizes=[5, 9, 13]):
-        super(SpatialPyramidPooling, self).__init__()
+    def __init__(self, pool_sizes=None):
+        if pool_sizes is None:
+            pool_sizes = [5, 9, 13]
+        super().__init__()
 
-        self.maxpools = nn.ModuleList([nn.MaxPool2d(pool_size, 1, pool_size//2) for pool_size in pool_sizes])
+        self.maxpools = nn.ModuleList([nn.MaxPool2d(pool_size, 1, pool_size // 2) for pool_size in pool_sizes])
 
     def forward(self, x):
         features = [maxpool(x) for maxpool in self.maxpools[::-1]]
-        features = torch.cat(features + [x], dim=1)
+        features = torch.cat([*features, x], dim=1)
 
         return features
 
-#---------------------------------------------------#
+
+# ---------------------------------------------------#
 #   卷积 + 上采样
-#---------------------------------------------------#
+# ---------------------------------------------------#
 class Upsample(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(Upsample, self).__init__()
+        super().__init__()
 
-        self.upsample = nn.Sequential(
-            conv2d(in_channels, out_channels, 1),
-            nn.Upsample(scale_factor=2, mode='nearest')
-        )
+        self.upsample = nn.Sequential(conv2d(in_channels, out_channels, 1), nn.Upsample(scale_factor=2, mode="nearest"))
 
-    def forward(self, x,):
+    def forward(
+        self,
+        x,
+    ):
         x = self.upsample(x)
         return x
 
-#---------------------------------------------------#
+
+# ---------------------------------------------------#
 #   三次卷积块
-#---------------------------------------------------#
+# ---------------------------------------------------#
 def make_three_conv(filters_list, in_filters):
     m = nn.Sequential(
         conv2d(in_filters, filters_list[0], 1),
@@ -59,9 +73,10 @@ def make_three_conv(filters_list, in_filters):
     )
     return m
 
-#---------------------------------------------------#
+
+# ---------------------------------------------------#
 #   五次卷积块
-#---------------------------------------------------#
+# ---------------------------------------------------#
 # def make_five_conv(filters_list, in_filters):
 #     m = nn.Sequential(
 #         conv2d(in_filters, filters_list[0], 1),
@@ -72,25 +87,27 @@ def make_three_conv(filters_list, in_filters):
 #     )
 #     return m
 
+
 class FuseConv(nn.Module):
     def __init__(self, filters_list, inplanes):
-        super(FuseConv, self).__init__()
+        super().__init__()
         self.posattn = CoordAtt(inplanes, inplanes)
-        self.pa1 = nn.Conv2d(2 * inplanes, inplanes, 5, padding=2, padding_mode='reflect', groups=inplanes, bias=True)
-        self.pa2 = nn.Conv2d(2 * inplanes, inplanes, 5, padding=2, padding_mode='reflect', groups=inplanes, bias=True)
-        self.conv = make_three_conv(filters_list, inplanes*2)
+        self.pa1 = nn.Conv2d(2 * inplanes, inplanes, 5, padding=2, padding_mode="reflect", groups=inplanes, bias=True)
+        self.pa2 = nn.Conv2d(2 * inplanes, inplanes, 5, padding=2, padding_mode="reflect", groups=inplanes, bias=True)
+        self.conv = make_three_conv(filters_list, inplanes * 2)
         self.sigmoid = nn.Sigmoid()
+
     def forward(self, x1, x2):
-        b,c,h,w = x1.shape
+        _b, _c, _h, _w = x1.shape
         add_fea = x1 + x2
         x1_1 = x1.unsqueeze(dim=2)
         x2_1 = x2.unsqueeze(dim=2)
         weight = self.posattn(add_fea)
         weight = weight.unsqueeze(dim=2)
         xa = torch.cat((x1_1, weight), dim=2)
-        xa = Rearrange('b c t h w -> b (c t) h w')(xa)
+        xa = Rearrange("b c t h w -> b (c t) h w")(xa)
         xb = torch.cat((x2_1, weight), dim=2)
-        xb = Rearrange('b c t h w -> b (c t) h w')(xb)
+        xb = Rearrange("b c t h w -> b (c t) h w")(xb)
         weight1 = self.sigmoid(self.pa1(xa))
         weight2 = self.sigmoid(self.pa2(xb))
         x1 = x1 + x1 * weight1
@@ -100,9 +117,9 @@ class FuseConv(nn.Module):
         return x_out
 
 
-#---------------------------------------------------#
+# ---------------------------------------------------#
 #   最后获得yolov4的输出
-#---------------------------------------------------#
+# ---------------------------------------------------#
 def yolo_head(filters_list, in_filters):
     m = nn.Sequential(
         conv2d(in_filters, filters_list[0], 3),
@@ -110,57 +127,57 @@ def yolo_head(filters_list, in_filters):
     )
     return m
 
-#---------------------------------------------------#
+
+# ---------------------------------------------------#
 #   yolo_body
-#---------------------------------------------------#
+# ---------------------------------------------------#
 class YoloBody(nn.Module):
-    def __init__(self, anchors_mask, num_classes, pretrained = False):
-        super(YoloBody, self).__init__()
-        #---------------------------------------------------#
+    def __init__(self, anchors_mask, num_classes, pretrained=False):
+        super().__init__()
+        # ---------------------------------------------------#
         #   生成CSPdarknet53的主干模型
         #   获得三个有效特征层，他们的shape分别是：
         #   52,52,256
         #   26,26,512
         #   13,13,1024
-        #---------------------------------------------------#
-        self.backbone   = darknet53(pretrained)
+        # ---------------------------------------------------#
+        self.backbone = darknet53(pretrained)
 
         self.attention = ConvSelfAttention(256)
         self.attention1 = ConvSelfAttention(512)
         self.sp = SPPConv(256)
         self.sp1 = SPPConv(512)
 
-        self.conv1      = make_three_conv([512,1024],1024)
-        self.SPP        = SpatialPyramidPooling()
-        self.conv2      = make_three_conv([512,1024],2048)
+        self.conv1 = make_three_conv([512, 1024], 1024)
+        self.SPP = SpatialPyramidPooling()
+        self.conv2 = make_three_conv([512, 1024], 2048)
 
-        self.upsample1          = Upsample(512,256)
-        self.conv_for_P4        = conv2d(512,256,1)
+        self.upsample1 = Upsample(512, 256)
+        self.conv_for_P4 = conv2d(512, 256, 1)
         # self.make_five_conv1    = make_five_conv([256, 512],512)
-        self.make_five_conv1    = FuseConv([256, 512],256)
+        self.make_five_conv1 = FuseConv([256, 512], 256)
 
-        self.upsample2          = Upsample(256,128)
-        self.conv_for_P3        = conv2d(256,128,1)
+        self.upsample2 = Upsample(256, 128)
+        self.conv_for_P3 = conv2d(256, 128, 1)
         # self.make_five_conv2    = make_five_conv([128, 256],256)
-        self.make_five_conv2    = FuseConv([128, 256],128)
+        self.make_five_conv2 = FuseConv([128, 256], 128)
 
         # 3*(5+num_classes) = 3*(5+20) = 3*(4+1+20)=75
-        self.yolo_head3         = yolo_head([256, len(anchors_mask[0]) * (5 + num_classes)],128)
+        self.yolo_head3 = yolo_head([256, len(anchors_mask[0]) * (5 + num_classes)], 128)
 
-        self.down_sample1       = conv2d(128,256,3,stride=2)
+        self.down_sample1 = conv2d(128, 256, 3, stride=2)
         # self.make_five_conv3    = make_five_conv([256, 512],512)
-        self.make_five_conv3    = FuseConv([256, 512],256)
+        self.make_five_conv3 = FuseConv([256, 512], 256)
 
         # 3*(5+num_classes) = 3*(5+20) = 3*(4+1+20)=75
-        self.yolo_head2         = yolo_head([512, len(anchors_mask[1]) * (5 + num_classes)],256)
+        self.yolo_head2 = yolo_head([512, len(anchors_mask[1]) * (5 + num_classes)], 256)
 
-        self.down_sample2       = conv2d(256,512,3,stride=2)
+        self.down_sample2 = conv2d(256, 512, 3, stride=2)
         # self.make_five_conv4    = make_five_conv([512, 1024],1024)
-        self.make_five_conv4    = FuseConv([512, 1024],512)
+        self.make_five_conv4 = FuseConv([512, 1024], 512)
 
         # 3*(5+num_classes)=3*(5+20)=3*(4+1+20)=75
-        self.yolo_head1         = yolo_head([1024, len(anchors_mask[2]) * (5 + num_classes)],512)
-
+        self.yolo_head1 = yolo_head([1024, len(anchors_mask[2]) * (5 + num_classes)], 512)
 
     def forward(self, x):
         #  backbone
@@ -186,7 +203,7 @@ class YoloBody(nn.Module):
         # P4 = torch.cat([P4,P5_upsample],axis=1)
         # # 26,26,512 -> 26,26,256 -> 26,26,512 -> 26,26,256 -> 26,26,512 -> 26,26,256
         # P4 = self.make_five_conv1(P4)
-        P4 = self.make_five_conv1(P4,P5_upsample)
+        P4 = self.make_five_conv1(P4, P5_upsample)
 
         # 26,26,256 -> 26,26,128 -> 52,52,128
         P4_upsample = self.upsample2(P4)
@@ -202,7 +219,7 @@ class YoloBody(nn.Module):
         # P3 = torch.cat([P3,P4_upsample],axis=1)
         # # 52,52,256 -> 52,52,128 -> 52,52,256 -> 52,52,128 -> 52,52,256 -> 52,52,128
         # P3 = self.make_five_conv2(P3)
-        P3 = self.make_five_conv2(P3,P4_upsample)
+        P3 = self.make_five_conv2(P3, P4_upsample)
 
         # 52,52,128 -> 26,26,256
         P3_downsample = self.down_sample1(P3)
@@ -211,7 +228,7 @@ class YoloBody(nn.Module):
         # P4 = torch.cat([P3_downsample,P4],axis=1)
         # # 26,26,512 -> 26,26,256 -> 26,26,512 -> 26,26,256 -> 26,26,512 -> 26,26,256
         # P4 = self.make_five_conv3(P4)
-        P4 = self.make_five_conv3(P3_downsample,P4)
+        P4 = self.make_five_conv3(P3_downsample, P4)
 
         # 26,26,256 -> 13,13,512
         P4_downsample = self.down_sample2(P4)
@@ -220,23 +237,22 @@ class YoloBody(nn.Module):
         # P5 = torch.cat([P4_downsample,P5],axis=1)
         # # 13,13,1024 -> 13,13,512 -> 13,13,1024 -> 13,13,512 -> 13,13,1024 -> 13,13,512
         # P5 = self.make_five_conv4(P5)
-        P5 = self.make_five_conv4(P4_downsample,P5)
+        P5 = self.make_five_conv4(P4_downsample, P5)
 
-
-        #---------------------------------------------------#
+        # ---------------------------------------------------#
         #   第三个特征层
         #   y3=(batch_size,75,52,52)
-        #---------------------------------------------------#
+        # ---------------------------------------------------#
         out2 = self.yolo_head3(P3)
-        #---------------------------------------------------#
+        # ---------------------------------------------------#
         #   第二个特征层
         #   y2=(batch_size,75,26,26)
-        #---------------------------------------------------#
+        # ---------------------------------------------------#
         out1 = self.yolo_head2(P4)
-        #---------------------------------------------------#
+        # ---------------------------------------------------#
         #   第一个特征层
         #   y1=(batch_size,75,13,13)
-        #---------------------------------------------------#
+        # ---------------------------------------------------#
         out0 = self.yolo_head1(P5)
 
         return out0, out1, out2
