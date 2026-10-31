@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import pdb
 from collections import defaultdict
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
@@ -160,10 +159,14 @@ class YOLODataset(BaseDataset):
     #         save_dataset_cache_file(self.prefix, path, x, DATASET_CACHE_VERSION)
     #     return x
 
-    def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:          # TODO: Daixb202607090822----- 在循环体内部，构造 label 字典之前，分离忽略框 -----
+    def cache_labels(
+        self, path: Path = Path("./labels.cache")
+    ) -> dict:  # TODO: Daixb202607090822----- 在循环体内部，构造 label 字典之前，分离忽略框 -----
         """Cache dataset labels, check images and read shapes.
+
         Args:
             path (Path): Path where to save the cache file.
+
         Returns:
             (dict): Dictionary containing cached labels and related information.
         """
@@ -197,27 +200,25 @@ class YOLODataset(BaseDataset):
                 nf += nf_f
                 ne += ne_f
                 nc += nc_f
-                if im_file:          # TODO: Daixb202607090822----- 在循环体内部，构造 label 字典之前，分离忽略框 -----
-                    if lb is not None and len(lb) > 0:     # 分离忽略框 (cls == -1)
+                if im_file:  # TODO: Daixb202607090822----- 在循环体内部，构造 label 字典之前，分离忽略框 -----
+                    if lb is not None and len(lb) > 0:  # 分离忽略框 (cls == -1)
                         cls_col = lb[:, 0:1]  # (n, 1)
                         ignore_mask = (cls_col == -1).flatten()
                         normal_mask = ~ignore_mask
-                        lb_normal = lb[normal_mask]       # 正常标签
-                        segments_normal = [segments[i] for i in range(len(segments)) if normal_mask[i]] if len(segments) > 0 else []
-                        keypoint_normal = keypoint[normal_mask] if keypoint is not None else None
-                        lb_ignore = lb[ignore_mask]         # 忽略标签
+                        lb_normal = lb[normal_mask]  # 正常标签
+                        [segments[i] for i in range(len(segments)) if normal_mask[i]] if len(segments) > 0 else []
+                        keypoint[normal_mask] if keypoint is not None else None
+                        lb_ignore = lb[ignore_mask]  # 忽略标签
                         # 处理空的情况
-                        cls_normal = lb_normal[:, 0:1] if len(lb_normal) > 0 else np.zeros((0, 1), dtype=np.float32)
-                        bboxes_normal = lb_normal[:, 1:] if len(lb_normal) > 0 else np.zeros((0, 4), dtype=np.float32)
+                        lb_normal[:, 0:1] if len(lb_normal) > 0 else np.zeros((0, 1), dtype=np.float32)
+                        lb_normal[:, 1:] if len(lb_normal) > 0 else np.zeros((0, 4), dtype=np.float32)
                         cls_ignore = lb_ignore[:, 0:1] if len(lb_ignore) > 0 else np.zeros((0, 1), dtype=np.float32)
                         bboxes_ignore = lb_ignore[:, 1:] if len(lb_ignore) > 0 else np.zeros((0, 4), dtype=np.float32)
                     else:
-                        cls_normal = np.zeros((0, 1), dtype=np.float32)
-                        bboxes_normal = np.zeros((0, 4), dtype=np.float32)
+                        np.zeros((0, 1), dtype=np.float32)
+                        np.zeros((0, 4), dtype=np.float32)
                         cls_ignore = np.zeros((0, 1), dtype=np.float32)
                         bboxes_ignore = np.zeros((0, 4), dtype=np.float32)
-                        segments_normal = []
-                        keypoint_normal = None
                     x["labels"].append(
                         {
                             "im_file": im_file,
@@ -377,6 +378,7 @@ class YOLODataset(BaseDataset):
             segments = np.zeros((0, segment_resamples, 2), dtype=np.float32)
         label["instances"] = Instances(bboxes, segments, keypoints, bbox_format=bbox_format, normalized=normalized)
         return label
+
     #
     # @staticmethod
     # def collate_fn(batch: list[dict]) -> dict:        # TODO: 原有方法：不考虑忽略区域
@@ -409,10 +411,12 @@ class YOLODataset(BaseDataset):
     #     return new_batch
 
     @staticmethod
-    def collate_fn(batch: list[dict]) -> dict:           # TODO: Daixb202607090829----- 新增处理忽略框  -----
+    def collate_fn(batch: list[dict]) -> dict:  # TODO: Daixb202607090829----- 新增处理忽略框  -----
         """Collate data samples into batches.
+
         Args:
             batch (list[dict]): List of dictionaries containing sample data.
+
         Returns:
             (dict): Collated batch with stacked tensors.
         """
@@ -433,10 +437,12 @@ class YOLODataset(BaseDataset):
             # TODO: Daixb202607090829----- 新增处理忽略框  -----
             if k == "ignore_bboxes":
                 # print(f"DEBUG collate: value list lengths: {[v.shape[0] for v in value]}")   # TODO: Daixb202607091337  处理 ignore_bboxes 之前打印：OK
-                for idx, v in enumerate(value): # value is a list of numpy arrays or tensors
+                for idx, v in enumerate(value):  # value is a list of numpy arrays or tensors
                     if v.shape[0] > 0:
                         ignore_batch_idx_list.append(torch.full((v.shape[0],), idx, dtype=torch.long))
-                value = [torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value]     # 统一转换为 torch.Tensor
+                value = [
+                    torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value
+                ]  # 统一转换为 torch.Tensor
                 # 过滤掉空张量（shape[0] == 0），因为 torch.cat 不允许空张量
                 value = [v for v in value if v.numel() > 0]
                 value = torch.cat(value, 0) if value else torch.empty(0, 4)
@@ -444,7 +450,7 @@ class YOLODataset(BaseDataset):
                 value = [torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value]
                 value = [v for v in value if v.numel() > 0]
                 value = torch.cat(value, 0) if value else torch.empty(0, 1)
-            #TODO:  ----------------------------------
+            # TODO:  ----------------------------------
 
             new_batch[k] = value
 
@@ -461,14 +467,16 @@ class YOLODataset(BaseDataset):
         else:
             ignore_batch_idx = torch.empty(0, dtype=torch.long)
         new_batch["ignore_batch_idx"] = ignore_batch_idx
-        #TODO:  ------------------------------------------------
+        # TODO:  ------------------------------------------------
         return new_batch
 
-    def __getitem__(self, index):    # TODO: Daixb202607091054----- 重写 __getitem__ 以确保 ignore_bboxes 和 ignore_cls 在数据增强后仍然保留。 -----
-        label = self.get_image_and_label(index)        # 获取原始数据（包含 ignore_bboxes, ignore_cls 等）
+    def __getitem__(
+        self, index
+    ):  # TODO: Daixb202607091054----- 重写 __getitem__ 以确保 ignore_bboxes 和 ignore_cls 在数据增强后仍然保留。 -----
+        label = self.get_image_and_label(index)  # 获取原始数据（包含 ignore_bboxes, ignore_cls 等）
         # 保存忽略框（在 transforms 之前）
-        ignore_bboxes = label.get('ignore_bboxes', np.zeros((0, 4), dtype=np.float32))
-        ignore_cls = label.get('ignore_cls', np.zeros((0, 1), dtype=np.float32))
+        ignore_bboxes = label.get("ignore_bboxes", np.zeros((0, 4), dtype=np.float32))
+        ignore_cls = label.get("ignore_cls", np.zeros((0, 1), dtype=np.float32))
         # if ignore_bboxes.shape[0] > 0:
         #     print(f"DEBUG __getitem__: index={index}, ignore_bboxes shape={ignore_bboxes.shape}")   # TODO: Daixb202607091054 在 __getitem__ 中，保存 ignore_bboxes 后立即打印：OK
 
@@ -477,8 +485,8 @@ class YOLODataset(BaseDataset):
             label = self.transforms(label)
 
         # 重新插入忽略框（确保它们不被丢弃）
-        label['ignore_bboxes'] = ignore_bboxes
-        label['ignore_cls'] = ignore_cls
+        label["ignore_bboxes"] = ignore_bboxes
+        label["ignore_cls"] = ignore_cls
 
         return label
 
