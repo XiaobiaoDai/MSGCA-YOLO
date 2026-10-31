@@ -28,17 +28,17 @@ backbone:
 head:
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
   - [[-1, 6], 1, Concat, [1]] # cat backbone P4
-  - [-1, 1, MSGA, []]     # 16 (P3 with MSGA) (自动匹配输入通道 64/128/...) #TODO：Daixb20260729 新增
+  - [-1, 1, MSGA, []] # 16 (P3 with MSGA) (自动匹配输入通道 64/128/...) #TODO：Daixb20260729 新增
   - [-1, 3, CACBL, [512]] # 13  #TODO：Daixb20260729 C2f —— CACBL
 
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
   - [[-1, 4], 1, Concat, [1]] # cat backbone P3
-  - [-1, 1, MSGA, []]    # TODO：Daixb20260729 新增
+  - [-1, 1, MSGA, []] # TODO：Daixb20260729 新增
   - [-1, 3, CACBL, [256]] # 16 (P3/8-small) TODO：Daixb20260729 C2f —— CACBL
 
   - [-1, 1, Conv, [256, 3, 2]]
   - [[-1, 13], 1, Concat, [1]] # cat head P4
-  - [-1, 1, MSGA, []]    # TODO：Daixb20260729 新增
+  - [-1, 1, MSGA, []] # TODO：Daixb20260729 新增
   - [-1, 3, CACBL, [512]] # 19 (P4/16-medium) #TODO：Daixb20260729 C2f —— CACBL
 
   - [-1, 1, SCDown, [512, 3, 2]]

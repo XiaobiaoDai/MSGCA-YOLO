@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
 from ultralytics.engine.trainer import BaseTrainer
@@ -231,13 +231,14 @@ class DetectionTrainer(BaseTrainer):
 
     def plot_training_samples(self, batch: dict[str, Any], ni: int) -> None:
         """Plot training samples with their annotations.
+
         Args:
             batch (dict[str, Any]): Dictionary containing batch data.
             ni (int): Batch index used for naming the output file.
         """
         # plot_batch = {k: v for k, v in batch.items() if k not in ['ignore_bboxes', 'ignore_cls']}    #TODO: Daixb202607131657  复制 batch，移除忽略框相关键
         plot_images(
-            labels=batch,   #TODO: Daixb202607131657  将batch替换为 plot_batch，即可移除忽略框相关键
+            labels=batch,  # TODO: Daixb202607131657  将batch替换为 plot_batch，即可移除忽略框相关键
             paths=batch["im_file"],
             fname=self.save_dir / f"train_batch{ni}.jpg",
             on_plot=self.on_plot,
