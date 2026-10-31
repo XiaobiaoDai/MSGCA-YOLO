@@ -3,12 +3,26 @@ from functools import partial
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class YOLOLoss(nn.Module):
-    def __init__(self, anchors, num_classes, input_shape, cuda, anchors_mask=[[6, 7, 8], [3, 4, 5], [0, 1, 2]], label_smoothing=0, focal_loss=False, alpha=0.25, gamma=2, iou_type='ciou'):
-        super(YOLOLoss, self).__init__()
+    def __init__(
+        self,
+        anchors,
+        num_classes,
+        input_shape,
+        cuda,
+        anchors_mask=None,
+        label_smoothing=0,
+        focal_loss=False,
+        alpha=0.25,
+        gamma=2,
+        iou_type="ciou",
+    ):
+        if anchors_mask is None:
+            anchors_mask = [[6, 7, 8], [3, 4, 5], [0, 1, 2]]
+        super().__init__()
         # -----------------------------------------------------------#
         #   13x13的特征层对应的anchor是[142, 110],[192, 243],[459, 401]
         #   26x26的特征层对应的anchor是[36, 75],[76, 55],[72, 146]
@@ -23,7 +37,7 @@ class YOLOLoss(nn.Module):
 
         self.balance = [0.4, 1.0, 4]
         self.box_ratio = 0.05
-        self.obj_ratio = 5 * (input_shape[0] * input_shape[1]) / (416 ** 2)
+        self.obj_ratio = 5 * (input_shape[0] * input_shape[1]) / (416**2)
         self.cls_ratio = 1 * (num_classes / 80)
 
         self.focal_loss = focal_loss
@@ -48,15 +62,12 @@ class YOLOLoss(nn.Module):
     def BCELoss(self, pred, target):
         epsilon = 1e-7
         pred = self.clip_by_tensor(pred, epsilon, 1.0 - epsilon)
-        output = - target * torch.log(pred) - (1.0 - target) * torch.log(1.0 - pred)
+        output = -target * torch.log(pred) - (1.0 - target) * torch.log(1.0 - pred)
         return output
 
     def box_iou(self, b1, b2):
-        """
-        输入为：
-        ----------
-        b1: tensor, shape=(batch, anchor_num, feat_w, feat_h, 4), xywh
-        b2: tensor, shape=(batch, anchor_num, feat_w, feat_h, 4), xywh
+        """输入为：. ---------- b1: tensor, shape=(batch, anchor_num, feat_w, feat_h, 4), xywh b2: tensor, shape=(batch,
+        anchor_num, feat_w, feat_h, 4), xywh.
 
         返回为：
         -------
@@ -67,7 +78,7 @@ class YOLOLoss(nn.Module):
         # ----------------------------------------------------#
         b1_xy = b1[..., :2]
         b1_wh = b1[..., 2:4]
-        b1_wh_half = b1_wh / 2.
+        b1_wh_half = b1_wh / 2.0
         b1_mins = b1_xy - b1_wh_half
         b1_maxes = b1_xy + b1_wh_half
         # ----------------------------------------------------#
@@ -75,7 +86,7 @@ class YOLOLoss(nn.Module):
         # ----------------------------------------------------#
         b2_xy = b2[..., :2]
         b2_wh = b2[..., 2:4]
-        b2_wh_half = b2_wh / 2.
+        b2_wh_half = b2_wh / 2.0
         b2_mins = b2_xy - b2_wh_half
         b2_maxes = b2_xy + b2_wh_half
 
@@ -103,7 +114,7 @@ class YOLOLoss(nn.Module):
         enclose_maxes = torch.max(b1_maxes, b2_maxes)
         enclose_wh = torch.max(enclose_maxes - enclose_mins, torch.zeros_like(intersect_maxes))
 
-        if self.iou_type == 'ciou':
+        if self.iou_type == "ciou":
             # ----------------------------------------------------#
             #   计算中心的距离
             # ----------------------------------------------------#
@@ -114,11 +125,17 @@ class YOLOLoss(nn.Module):
             enclose_diagonal = torch.sum(torch.pow(enclose_wh, 2), axis=-1)
             ciou = iou - 1.0 * (center_distance) / torch.clamp(enclose_diagonal, min=1e-6)
 
-            v = (4 / (math.pi ** 2)) * torch.pow((torch.atan(b1_wh[..., 0] / torch.clamp(b1_wh[..., 1], min=1e-6)) - torch.atan(b2_wh[..., 0] / torch.clamp(b2_wh[..., 1], min=1e-6))), 2)
+            v = (4 / (math.pi**2)) * torch.pow(
+                (
+                    torch.atan(b1_wh[..., 0] / torch.clamp(b1_wh[..., 1], min=1e-6))
+                    - torch.atan(b2_wh[..., 0] / torch.clamp(b2_wh[..., 1], min=1e-6))
+                ),
+                2,
+            )
             alpha = v / torch.clamp((1.0 - iou + v), min=1e-6)
             out = ciou - alpha * v
 
-        elif self.iou_type == 'siou':
+        elif self.iou_type == "siou":
             # ----------------------------------------------------#
             #   Angle cost
             # ----------------------------------------------------#
@@ -161,8 +178,12 @@ class YOLOLoss(nn.Module):
             #   真实框与预测框的宽高差异与最大值的比值
             #   差异越小，costshape_cost越小
             # ----------------------------------------------------#
-            omiga_w = torch.abs(b1_wh[..., 0] - b2_wh[..., 0]) / torch.clamp(torch.max(b1_wh[..., 0], b2_wh[..., 0]), min=1e-6)
-            omiga_h = torch.abs(b1_wh[..., 1] - b2_wh[..., 1]) / torch.clamp(torch.max(b1_wh[..., 1], b2_wh[..., 1]), min=1e-6)
+            omiga_w = torch.abs(b1_wh[..., 0] - b2_wh[..., 0]) / torch.clamp(
+                torch.max(b1_wh[..., 0], b2_wh[..., 0]), min=1e-6
+            )
+            omiga_h = torch.abs(b1_wh[..., 1] - b2_wh[..., 1]) / torch.clamp(
+                torch.max(b1_wh[..., 1], b2_wh[..., 1]), min=1e-6
+            )
             shape_cost = torch.pow(1 - torch.exp(-1 * omiga_w), 4) + torch.pow(1 - torch.exp(-1 * omiga_h), 4)
             out = iou - 0.5 * (distance_cost + shape_cost)
         return out
@@ -211,7 +232,9 @@ class YOLOLoss(nn.Module):
         #   batch_size, 3, 26, 26, 5 + num_classes
         #   batch_size, 3, 52, 52, 5 + num_classes
         # -----------------------------------------------#
-        prediction = input.view(bs, len(self.anchors_mask[l]), self.bbox_attrs, in_h, in_w).permute(0, 1, 3, 4, 2).contiguous()
+        prediction = (
+            input.view(bs, len(self.anchors_mask[l]), self.bbox_attrs, in_h, in_w).permute(0, 1, 3, 4, 2).contiguous()
+        )
 
         # -----------------------------------------------#
         #   先验框的中心位置的调整参数
@@ -279,9 +302,18 @@ class YOLOLoss(nn.Module):
         #   计算是否包含物体的置信度损失
         # ---------------------------------------------------------------#
         if self.focal_loss:
-            pos_neg_ratio = torch.where(obj_mask, torch.ones_like(conf) * self.alpha, torch.ones_like(conf) * (1 - self.alpha))
+            pos_neg_ratio = torch.where(
+                obj_mask, torch.ones_like(conf) * self.alpha, torch.ones_like(conf) * (1 - self.alpha)
+            )
             hard_easy_ratio = torch.where(obj_mask, torch.ones_like(conf) - conf, conf) ** self.gamma
-            loss_conf = torch.mean((self.BCELoss(conf, obj_mask.type_as(conf)) * pos_neg_ratio * hard_easy_ratio)[noobj_mask.bool() | obj_mask]) * self.focal_loss_ratio
+            loss_conf = (
+                torch.mean(
+                    (self.BCELoss(conf, obj_mask.type_as(conf)) * pos_neg_ratio * hard_easy_ratio)[
+                        noobj_mask.bool() | obj_mask
+                    ]
+                )
+                * self.focal_loss_ratio
+            )
         else:
             loss_conf = torch.mean(self.BCELoss(conf, obj_mask.type_as(conf))[noobj_mask.bool() | obj_mask])
         loss += loss_conf * self.balance[l] * self.obj_ratio
@@ -371,7 +403,9 @@ class YOLOLoss(nn.Module):
             #   将先验框转换一个形式
             #   9, 4
             # -------------------------------------------------------#
-            anchor_shapes = torch.FloatTensor(torch.cat((torch.zeros((len(anchors), 2)), torch.FloatTensor(anchors)), 1))
+            anchor_shapes = torch.FloatTensor(
+                torch.cat((torch.zeros((len(anchors), 2)), torch.FloatTensor(anchors)), 1)
+            )
             # -------------------------------------------------------#
             #   计算交并比
             #   self.calculate_iou(gt_box, anchor_shapes) = [num_true_box, 9]每一个真实框和9个先验框的重合情况
@@ -426,10 +460,21 @@ class YOLOLoss(nn.Module):
         # -----------------------------------------------------#
         #   生成网格，先验框中心，网格左上角
         # -----------------------------------------------------#
-        grid_x = torch.linspace(0, in_w - 1, in_w).repeat(in_h, 1).repeat(
-            int(bs * len(self.anchors_mask[l])), 1, 1).view(x.shape).type_as(x)
-        grid_y = torch.linspace(0, in_h - 1, in_h).repeat(in_w, 1).t().repeat(
-            int(bs * len(self.anchors_mask[l])), 1, 1).view(y.shape).type_as(x)
+        grid_x = (
+            torch.linspace(0, in_w - 1, in_w)
+            .repeat(in_h, 1)
+            .repeat(int(bs * len(self.anchors_mask[l])), 1, 1)
+            .view(x.shape)
+            .type_as(x)
+        )
+        grid_y = (
+            torch.linspace(0, in_h - 1, in_h)
+            .repeat(in_w, 1)
+            .t()
+            .repeat(int(bs * len(self.anchors_mask[l])), 1, 1)
+            .view(y.shape)
+            .type_as(x)
+        )
 
         # 生成先验框的宽高
         scaled_anchors_l = np.array(scaled_anchors)[self.anchors_mask[l]]
@@ -480,29 +525,38 @@ class YOLOLoss(nn.Module):
         return noobj_mask, pred_boxes
 
 
-def weights_init(net, init_type='normal', init_gain=0.02):
+def weights_init(net, init_type="normal", init_gain=0.02):
     def init_func(m):
         classname = m.__class__.__name__
-        if hasattr(m, 'weight') and classname.find('Conv') != -1:
-            if init_type == 'normal':
+        if hasattr(m, "weight") and classname.find("Conv") != -1:
+            if init_type == "normal":
                 torch.nn.init.normal_(m.weight.data, 0.0, init_gain)
-            elif init_type == 'xavier':
+            elif init_type == "xavier":
                 torch.nn.init.xavier_normal_(m.weight.data, gain=init_gain)
-            elif init_type == 'kaiming':
-                torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-            elif init_type == 'orthogonal':
+            elif init_type == "kaiming":
+                torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode="fan_in")
+            elif init_type == "orthogonal":
                 torch.nn.init.orthogonal_(m.weight.data, gain=init_gain)
             else:
-                raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
-        elif classname.find('BatchNorm2d') != -1:
+                raise NotImplementedError(f"initialization method [{init_type}] is not implemented")
+        elif classname.find("BatchNorm2d") != -1:
             torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
             torch.nn.init.constant_(m.bias.data, 0.0)
 
-    print('initialize network with %s type' % init_type)
+    print(f"initialize network with {init_type} type")
     net.apply(init_func)
 
 
-def get_lr_scheduler(lr_decay_type, lr, min_lr, total_iters, warmup_iters_ratio=0.05, warmup_lr_ratio=0.1, no_aug_iter_ratio=0.05, step_num=10):
+def get_lr_scheduler(
+    lr_decay_type,
+    lr,
+    min_lr,
+    total_iters,
+    warmup_iters_ratio=0.05,
+    warmup_lr_ratio=0.1,
+    no_aug_iter_ratio=0.05,
+    step_num=10,
+):
     def yolox_warm_cos_lr(lr, min_lr, total_iters, warmup_total_iters, warmup_lr_start, no_aug_iter, iters):
         if iters <= warmup_total_iters:
             # lr = (lr - warmup_lr_start) * iters / float(warmup_total_iters) + warmup_lr_start
@@ -511,7 +565,8 @@ def get_lr_scheduler(lr_decay_type, lr, min_lr, total_iters, warmup_iters_ratio=
             lr = min_lr
         else:
             lr = min_lr + 0.5 * (lr - min_lr) * (
-                    1.0 + math.cos(math.pi * (iters - warmup_total_iters) / (total_iters - warmup_total_iters - no_aug_iter))
+                1.0
+                + math.cos(math.pi * (iters - warmup_total_iters) / (total_iters - warmup_total_iters - no_aug_iter))
             )
         return lr
 
@@ -519,7 +574,7 @@ def get_lr_scheduler(lr_decay_type, lr, min_lr, total_iters, warmup_iters_ratio=
         if step_size < 1:
             raise ValueError("step_size must above 1.")
         n = iters // step_size
-        out_lr = lr * decay_rate ** n
+        out_lr = lr * decay_rate**n
         return out_lr
 
     if lr_decay_type == "cos":
@@ -538,4 +593,4 @@ def get_lr_scheduler(lr_decay_type, lr, min_lr, total_iters, warmup_iters_ratio=
 def set_optimizer_lr(optimizer, lr_scheduler_func, epoch):
     lr = lr_scheduler_func(epoch)
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        param_group["lr"] = lr
