@@ -303,7 +303,7 @@ def verify_image_mask(args: tuple) -> tuple:
 #         return [None, None, None, None, None, nm, nf, ne, nc, msg]
 
 
-def verify_image_label(args: tuple) -> list:   ##TODO: Daixb202607090919新增：分离正常标签和忽略标签 ----------
+def verify_image_label(args: tuple) -> list:  ##TODO: Daixb202607090919新增：分离正常标签和忽略标签 ----------
     """Verify one image-label pair."""
     im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls = args
     # Number (missing, found, empty, corrupt), message, segments, keypoints
@@ -340,17 +340,23 @@ def verify_image_label(args: tuple) -> list:   ##TODO: Daixb202607090919新增�
                     else:
                         normal_points = lb[normal_mask, 1:]  # 正常标签的框坐标
                     # 对正常标签进行坐标范围检查（允许 1% 容差）
-                    assert normal_points.max() <= 1.01, (f"non-normalized or out of bounds coordinates {normal_points[normal_points > 1.01]}")
-                    assert normal_points.min() >= -0.01, (f"negative class labels or coordinate {normal_points[normal_points < -0.01]}")
+                    assert normal_points.max() <= 1.01, (
+                        f"non-normalized or out of bounds coordinates {normal_points[normal_points > 1.01]}"
+                    )
+                    assert normal_points.min() >= -0.01, (
+                        f"negative class labels or coordinate {normal_points[normal_points < -0.01]}"
+                    )
 
                     # 检查正常标签的类别索引是否超出数据集类别数
                     max_cls = 0 if single_cls else lb[normal_mask, 0].max()
-                    assert max_cls < num_cls, (f"Label class {int(max_cls)} exceeds dataset class count {num_cls}. "
-                        f"Possible class labels are 0-{num_cls - 1}")
+                    assert max_cls < num_cls, (
+                        f"Label class {int(max_cls)} exceeds dataset class count {num_cls}. "
+                        f"Possible class labels are 0-{num_cls - 1}"
+                    )
                 # 对于 -1 标签，不进行任何检查，直接保留
                 # ---------------------------------------------
 
-                #TODO: Daixb202607090919去除重复行（包括 -1 行和正常行）
+                # TODO: Daixb202607090919去除重复行（包括 -1 行和正常行）
                 _, i = np.unique(lb, axis=0, return_index=True)
                 if len(i) < nl:  # duplicate row check
                     lb = lb[i]  # remove duplicates
