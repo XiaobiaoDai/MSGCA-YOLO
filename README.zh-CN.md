@@ -51,7 +51,8 @@ bibtex
   author={Dai, Xiaobiao and Chen, Zhigang and Dong, Jianhua and Long, Xichen and Hu, Jinkun and Nie, Zexun},
   journal={PLOS ONE},
   year={2026},
-  publisher={Public Library of Science}
+  publisher={Public Library of Science},
+  doi={10.1371/journal.pone.0362201}
 }
 ⚖️ 许可证
 本项目采用 MIT License 许可协议。
